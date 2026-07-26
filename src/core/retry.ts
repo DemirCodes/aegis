@@ -1,50 +1,73 @@
 // ═══════════════════════════════════════════════════
-// AEGIS — Timeout
-// İşleme maksimum süre koyar. Süre dolunca iptal.
+// AEGIS — Retry
+// Başarısız işlemi otomatik tekrar dener.
+// Backoff + Jitter desteği.
+// Sadece classifyError().retryable === true ise çalışır.
 // ═══════════════════════════════════════════════════
 
-import type { TimeoutOptions } from '../types';
-
-// ──── YARDIMCI ──────────────────────────────────
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+import type { RetryOptions, BackoffStrategy } from '../types';
+import { classifyError } from './errorClassifier';
+import { sleep } from './timeout';
 
 // ═══════════════════════════════════════════════════
-// WITH TIMEOUT
+// WITH RETRY
 // ═══════════════════════════════════════════════════
 
-function withTimeout<T>(
+function withRetry<T>(
   fn: () => Promise<T>,
-  options: number | TimeoutOptions
+  options: Partial<RetryOptions> = {}
 ): Promise<T> {
-  const opts = typeof options === 'number' ? { ms: options } : options;
-  const ms = opts.ms;
-  const message = opts.message || `Operation timed out after ${ms}ms`;
+  const {
+    maxRetries = 3,
+    backoff = 'exponential' as BackoffStrategy,
+    baseDelayMs = 1000,
+    jitter = true,
+  } = options;
 
   return new Promise((resolve, reject) => {
-    let settled = false;
+    let attempt = 0;
 
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error(message));
-    }, ms);
+    function tryOnce(): void {
+      attempt++;
 
-    fn()
-      .then(result => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(result);
-      })
-      .catch(error => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        reject(error);
-      });
+      fn()
+        .then(resolve)
+        .catch(async (error: Error) => {
+          const classified = classifyError(error);
+          const attemptsLeft = attempt <= maxRetries;
+
+          // Eğer hata tekrar denenebilir değilse veya deneme hakkı bittiyse
+          if (!classified.retryable || !attemptsLeft) {
+            return reject(classified);
+          }
+
+          // Bekleme süresini hesapla
+          let delay: number;
+          switch (backoff) {
+            case 'fixed':
+              delay = baseDelayMs;
+              break;
+            case 'linear':
+              delay = baseDelayMs * attempt;
+              break;
+            case 'exponential':
+              delay = baseDelayMs * Math.pow(2, attempt - 1);
+              break;
+            default:
+              delay = baseDelayMs;
+          }
+
+          // Jitter: rastgelelik ekle, thundering herd'ü engelle
+          if (jitter) {
+            delay = delay + Math.random() * (delay * 0.3);
+          }
+
+          await sleep(Math.floor(delay));
+          tryOnce();
+        });
+    }
+
+    tryOnce();
   });
 }
 
@@ -52,4 +75,4 @@ function withTimeout<T>(
 // EXPORT
 // ═══════════════════════════════════════════════════
 
-export { withTimeout, sleep };
+export { withRetry };
