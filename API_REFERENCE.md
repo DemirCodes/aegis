@@ -1242,7 +1242,7 @@ Metodlar:
 
 ## 📄 LICENSE
 
-MIT License — Copyright (c) 2025 Aegis Contributors
+MIT License — Copyright (c) 2026 Aegis Contributors
 
 ---
 
