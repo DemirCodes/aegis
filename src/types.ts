@@ -107,6 +107,13 @@ interface AegisProfile {
   idempotency?: boolean | { ttl?: number };
   fallback?: { type: FallbackStrategy; message?: string };
   threatDetection?: boolean;
+  autoBlock: boolean;
+  dependencies: string[];
+  poisonPill?: boolean;
+  shadowFn?: ()=> Promise<unknown>;
+  compareShadowResults?: boolean;
+  throttling?: ThrottlingOptions;       
+  shadowTraffic:boolean;
   deduplication?: boolean;
   importance?: ImportanceLevel;
   cacheStampede?: { ttlMs: number; strategy: CacheStampedeStrategy };
@@ -234,6 +241,14 @@ interface CreateAegisOptions {
   profiles?: Record<string, AegisProfile>;
 }
 
+// ──── ThrootlingOptions ────────────────────────────────
+
+interface ThrottlingOptions {
+  max: number;
+  windowMs: number;
+  delayMs?: number; 
+}
+
 // ═══════════════════════════════════════════════════
 // EXPORT
 // ═══════════════════════════════════════════════════
@@ -272,4 +287,5 @@ export type {
   AegisInstance,
   AegisHealth,
   CreateAegisOptions,
+  ThrottlingOptions,
 };

@@ -3,7 +3,8 @@
 // Kademeli yavaşlatma. Banlamadan önce istekleri geciktirir.
 // ═══════════════════════════════════════════════════
 
-import { sleep } from './timeout';
+import type { ThrottlingOptions } from '../types.js';
+import { sleep } from './timeout.js';
 
 // ──── IN-MEMORY STORE ────────────────────────────
 
@@ -29,18 +30,13 @@ function sweepStaleThrottles(now: number = Date.now()): void {
 // WITH THROTTLING
 // ═══════════════════════════════════════════════════
 
-interface ThrottlingOptions {
-  max: number;
-  windowMs: number;
-  delayMs: number;
-}
-
 function withThrottling<T>(
   identifier: string,
   fn: () => Promise<T>,
   options: ThrottlingOptions
 ): Promise<T> {
   const now = Date.now();
+  const delayMs = options.delayMs ?? 1000;
   let store = throttles.get(identifier);
 
   if (!store || now > store.resetAt) {
@@ -54,14 +50,10 @@ function withThrottling<T>(
     store.count++;
   }
 
-  // Limit aşıldıysa kademeli gecikme uygula
   if (store.count > options.max) {
-    // Her aşımda gecikme artsın
     const extraCount = store.count - options.max;
-    const delay = options.delayMs * Math.pow(2, extraCount - 1);
-
+    const delay = delayMs * Math.pow(2, extraCount - 1);
     store.lastDelay = delay;
-
     return sleep(delay).then(() => fn());
   }
 

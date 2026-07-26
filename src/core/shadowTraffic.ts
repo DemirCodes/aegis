@@ -4,6 +4,8 @@
 // Ana işlem etkilenmez, shadow sonuç karşılaştırılır.
 // ═══════════════════════════════════════════════════
 
+import { error } from "node:console";
+
 // ──── TYPES ──────────────────────────────────────
 
 interface ShadowResult<T> {
@@ -23,67 +25,22 @@ interface ShadowOptions {
   onMismatch?: (result: ShadowResult<unknown>) => void;
 }
 
-// ═══════════════════════════════════════════════════
-// WITH SHADOW TRAFFIC
-// ═══════════════════════════════════════════════════
+type Result<T> = 
+  | { success: true; result: T }
+  | { success: false; error: Error };
 
-function withShadowTraffic<T>(
-  primaryFn: () => Promise<T>,
-  shadowFn: () => Promise<T>,
-  options: ShadowOptions = {}
-): Promise<T> {
-  const timeoutMs = options.timeoutMs ?? 5000;
-  const compareResults = options.compareResults ?? false;
-
-  const primaryStart = Date.now();
-
-  // Shadow'u arka planda başlat, ana işlemi bekleme
-  const shadowPromise = withTimeout(shadowFn, timeoutMs)
-    .then(result => ({ success: true, result }))
-    .catch(error => ({ success: false, error: error as Error }));
-
-  return primaryFn()
-    .then(async primaryResult => {
-      const primaryDuration = Date.now() - primaryStart;
-
-      // Shadow sonucunu bekle (ama ana işlem çoktan döndü)
-      const shadowStart = Date.now();
-      const shadowOutcome = await shadowPromise;
-      const shadowDuration = Date.now() - shadowStart;
-
-      const shadowResult: ShadowResult<T> = {
-        primary: primaryResult,
-        match: true,
-        durationMs: {
-          primary: primaryDuration,
-          shadow: shadowOutcome.success ? shadowDuration : undefined,
-        },
-      };
-
-      if (shadowOutcome.success) {
-        shadowResult.shadow = shadowOutcome.result;
-      } else {
-        shadowResult.shadowError = shadowOutcome.error;
-      }
-
-      // Sonuçları karşılaştır
-      if (compareResults && shadowOutcome.success) {
-        try {
-          shadowResult.match = JSON.stringify(primaryResult) === JSON.stringify(shadowOutcome.result);
-        } catch {
-          shadowResult.match = primaryResult === (shadowOutcome.result as unknown);
-        }
-
-        if (!shadowResult.match && options.onMismatch) {
-          options.onMismatch(shadowResult);
-        }
-      }
-
-      return primaryResult;
-    });
+function isSuccess<T>(result: Result<T>): result is { success: true; result: T } {
+  return result.success;
 }
 
-// ──── YARDIMCI ──────────────────────────────────
+// ──── HELPERS ──────────────────────────────────
+
+function toResult<T>(promise: Promise<T>): Promise<Result<T>> {
+  return promise
+    .then(result => ({ success: true, result } satisfies Result<T> ))
+    .catch(error => ({ success: false, error: error as Error } satisfies Result<T>));
+}
+
 
 function withTimeout<T>(fn: () => Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -99,6 +56,64 @@ function withTimeout<T>(fn: () => Promise<T>, ms: number): Promise<T> {
         reject(error);
       });
   });
+}
+
+// ═══════════════════════════════════════════════════
+// WITH SHADOW TRAFFIC
+// ═══════════════════════════════════════════════════
+
+function withShadowTraffic<T>(
+  primaryFn: () => Promise<T>,
+  shadowFn: () => Promise<T>,
+  options: ShadowOptions = {}
+): Promise<T> {
+  const timeoutMs = options.timeoutMs ?? 5000;
+  const compareResults = options.compareResults ?? false;
+
+  const primaryStart = Date.now();
+
+  // Shadow'u arka planda başlat, ana işlemi bekleme
+  const shadowPromise = toResult(withTimeout(shadowFn, timeoutMs));
+
+  return primaryFn()
+    .then(async primaryResult => {
+      const primaryDuration = Date.now() - primaryStart;
+
+      // Shadow sonucunu bekle (ama ana işlem çoktan döndü)
+      const shadowStart = Date.now();
+      const shadowOutcome = await shadowPromise;
+      const shadowDuration = Date.now() - shadowStart;
+
+      const shadowResult: ShadowResult<T> = {
+        primary: primaryResult,
+        match: true,
+        durationMs: {
+          primary: primaryDuration,
+          shadow: isSuccess(shadowOutcome) ? shadowDuration : undefined,
+        },
+      };
+
+      if (isSuccess(shadowOutcome)) {
+        shadowResult.shadow = shadowOutcome.result;
+      } else {
+        shadowResult.shadowError = shadowOutcome.error;
+      }
+
+      // Sonuçları karşılaştır
+      if (compareResults && isSuccess(shadowOutcome)) {
+        try {
+          shadowResult.match = JSON.stringify(primaryResult) === JSON.stringify(shadowOutcome.result);
+        } catch {
+          shadowResult.match = primaryResult === (shadowOutcome.result as unknown);
+        }
+
+        if (!shadowResult.match && options.onMismatch) {
+          options.onMismatch(shadowResult);
+        }
+      }
+
+      return primaryResult;
+    });
 }
 
 // ═══════════════════════════════════════════════════
