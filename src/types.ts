@@ -249,6 +249,17 @@ interface ThrottlingOptions {
   delayMs?: number; 
 }
 
+
+// ──── StoredToken ────────────────────────────────
+
+interface StoredToken {
+  pan: string;
+  iv: string;        // Base64 encoded IV
+  authTag: string;   // Base64 encoded auth tag
+  cvv?: string;
+  expiry?: string;
+}
+
 // ═══════════════════════════════════════════════════
 // EXPORT
 // ═══════════════════════════════════════════════════
@@ -288,4 +299,5 @@ export type {
   AegisHealth,
   CreateAegisOptions,
   ThrottlingOptions,
+  StoredToken,
 };
