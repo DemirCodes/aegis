@@ -443,8 +443,7 @@ MIT
 
 ## 👥 Authors
 
-- **You** (Senior Engineer)
-- Built with ❤️ for production systems
+- **DemirCodes** 
 
 ---
 
