@@ -1,0 +1,13 @@
+{
+  "name": "aegis-starter-template",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AEGIS Starter Template",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

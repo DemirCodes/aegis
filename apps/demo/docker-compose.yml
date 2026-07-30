@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL - Primary Database
   postgres:
@@ -46,6 +44,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    profiles:
+      - test
 
   # Redis - Cache, Sessions, Queue Backend
   redis:

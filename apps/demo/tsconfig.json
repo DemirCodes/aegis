@@ -3,17 +3,7 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "baseUrl": ".",
-    "paths": {
-      "@aegis/core": ["../../packages/aegis-core/src"],
-      "@aegis/audit": ["../../packages/aegis-audit/src"],
-      "@aegis/observability": ["../../packages/aegis-observability/src"],
-      "@aegis/resilience": ["../../packages/aegis-resilience/src"],
-      "@aegis/cache": ["../../packages/aegis-cache/src"],
-      "@aegis/validation": ["../../packages/aegis-validation/src"],
-      "@aegis/queue": ["../../packages/aegis-queue/src"],
-      "@aegis/security": ["../../packages/aegis-security/src"]
-    }
+    "baseUrl": "."
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

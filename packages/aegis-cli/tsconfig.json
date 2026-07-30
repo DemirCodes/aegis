@@ -3,12 +3,7 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "baseUrl": ".",
-    "module": "commonjs",
-    "paths": {
-      "@aegis/core": ["../aegis-core/src"],
-      "@aegis/cli": ["./src"]
-    }
+    "baseUrl": "."
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "tests"]
