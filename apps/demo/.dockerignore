@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.turbo/
+.git/
+.gitignore
+*.md
+.DS_Store
+.env
+.env.local
+.env.*.local
+coverage/
+.nyc_output/
+logs/
+*.log
+.vscode/
+.idea/
