@@ -1,0 +1,39 @@
+// ============================================
+// @aegis/core - Error Codes
+// ============================================
+
+export const ErrorCodes = {
+  // General
+  INTERNAL_ERROR: 'INTERNAL_ERROR',
+  NOT_FOUND: 'NOT_FOUND',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  UNAUTHORIZED: 'UNAUTHORIZED',
+  FORBIDDEN: 'FORBIDDEN',
+  CONFLICT: 'CONFLICT',
+  TOO_MANY_REQUESTS: 'TOO_MANY_REQUESTS',
+
+  // Audit
+  AUDIT_LOG_FAILED: 'AUDIT_LOG_FAILED',
+  GDPR_DELETION_FAILED: 'GDPR_DELETION_FAILED',
+
+  // Resilience
+  CIRCUIT_OPEN: 'CIRCUIT_OPEN',
+  RETRY_EXHAUSTED: 'RETRY_EXHAUSTED',
+
+  // Cache
+  CACHE_MISS: 'CACHE_MISS',
+  CACHE_ERROR: 'CACHE_ERROR',
+
+  // Queue
+  QUEUE_JOB_FAILED: 'QUEUE_JOB_FAILED',
+  DLQ_PROCESSING_FAILED: 'DLQ_PROCESSING_FAILED',
+
+  // Security
+  RATE_LIMIT_EXCEEDED: 'RATE_LIMIT_EXCEEDED',
+  IP_BLACKLISTED: 'IP_BLACKLISTED',
+  TOKEN_EXPIRED: 'TOKEN_EXPIRED',
+  TOKEN_REVOKED: 'TOKEN_REVOKED',
+  RISK_SCORE_HIGH: 'RISK_SCORE_HIGH',
+} as const;
+
+export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

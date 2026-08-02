@@ -2,8 +2,15 @@
   "name": "@aegis/core",
   "version": "0.1.0",
   "description": "AEGIS Core - Shared utilities, types, logger and error handling",
+  "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "files": [
     "dist"
   ],
@@ -17,7 +24,8 @@
   "dependencies": {
     "winston": "^3.11.0",
     "zod": "^3.22.0",
-    "dotenv": "^16.3.0"
+    "dotenv": "^16.3.0",
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "typescript": "^5.3.0",

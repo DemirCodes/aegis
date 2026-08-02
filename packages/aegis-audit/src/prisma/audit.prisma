@@ -1,77 +1,40 @@
-// AEGIS Audit Prisma Schema
-// This schema is used by @aegis/audit package
-// It extends the main schema with audit-specific models
+// ============================================
+// @aegis/audit - Audit Trail Models
+// ============================================
 
-generator client {
-  provider = "prisma-client-js"
-  output   = "../../../node_modules/.prisma/client-audit"
-}
-
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-/// Complete audit trail for compliance
 model AuditLog {
-  id            String    @id @default(uuid())
-  
-  userId        String
-  user          User      @relation(fields: [userId], references: [id], onDelete: SetNull)
-  
-  entityType    String
-  entityId      String
-  action        String    // 'CREATE', 'UPDATE', 'DELETE'
-  
-  changes       Json
+  id             String   @id @default(uuid())
+  userId         String
+  entityType     String
+  entityId       String
+  action         String
+  changes        Json
   changesSummary String?
-  
-  ipAddress     String?
-  userAgent     String?
-  correlationId String?
-  metadata      Json?
-  
-  status        String    @default("completed")
-  errorMessage  String?
-  
-  timestamp     DateTime  @default(now())
-  
+  ipAddress      String?
+  userAgent      String?
+  correlationId  String?
+  metadata       Json?
+  status         String   @default("completed")
+  errorMessage   String?
+  timestamp      DateTime @default(now())
+
   @@index([userId])
   @@index([entityType])
   @@index([entityId])
   @@index([action])
   @@index([timestamp])
-  @@index([correlationId])
 }
 
-/// Soft delete registry (GDPR)
 model SoftDeleteRegistry {
   id             String    @id @default(uuid())
-  
   entityType     String
   entityId       String
-  
   originalData   Json
-  
   deletedBy      String?
   deletionReason String?
   isHardDeleted  Boolean   @default(false)
   hardDeletedAt  DateTime?
-  
   createdAt      DateTime  @default(now())
-  
-  @@unique([entityType, entityId])
-  @@index([entityType])
-  @@index([createdAt])
-}
 
-// Reference to User model (defined in main schema)
-model User {
-  id            String    @id @default(uuid())
-  email         String    @unique
-  username      String    @unique
-  auditLogs     AuditLog[]
-  
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  @@unique([entityType, entityId])
 }

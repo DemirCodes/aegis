@@ -1,0 +1,332 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// CORE TABLES
+// ============================================
+
+model User {
+  id            String        @id @default(uuid())
+  email         String        @unique
+  username      String        @unique
+  password      String
+  firstName     String?
+  lastName      String?
+  phone         String?
+  avatar        String?
+  isActive      Boolean       @default(true)
+  isVerified    Boolean       @default(false)
+  verifiedAt    DateTime?
+  lastLoginAt   DateTime?
+  loginAttempts Int           @default(0)
+  lockedUntil   DateTime?
+  roles         UserRole[]
+  sessions      UserSession[]
+  auditLogs     AuditLog[]
+  riskEvents    RiskEvent[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  deletedAt     DateTime?
+
+  @@index([email])
+  @@index([username])
+  @@index([isActive])
+  @@index([deletedAt])
+}
+
+model Role {
+  id          String     @id @default(uuid())
+  name        String     @unique
+  description String?
+  permissions String[]
+  users       UserRole[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+model UserRole {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roleId    String
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  grantedAt DateTime @default(now())
+  grantedBy String?
+
+  @@unique([userId, roleId])
+}
+
+model UserSession {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshToken String   @unique
+  accessToken  String?
+  ipAddress    String?
+  userAgent    String?
+  deviceId     String?
+  isActive     Boolean  @default(true)
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ============================================
+// AUDIT TABLES
+// ============================================
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  entityType     String
+  entityId       String
+  action         String
+  changes        Json
+  changesSummary String?
+  ipAddress      String?
+  userAgent      String?
+  correlationId  String?
+  metadata       Json?
+  status         String   @default("completed")
+  errorMessage   String?
+  timestamp      DateTime @default(now())
+
+  @@index([userId])
+  @@index([entityType])
+  @@index([entityId])
+  @@index([action])
+  @@index([timestamp])
+}
+
+model SoftDeleteRegistry {
+  id             String    @id @default(uuid())
+  entityType     String
+  entityId       String
+  originalData   Json
+  deletedBy      String?
+  deletionReason String?
+  isHardDeleted  Boolean   @default(false)
+  hardDeletedAt  DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@unique([entityType, entityId])
+}
+
+// ============================================
+// SECURITY TABLES
+// ============================================
+
+model RateLimit {
+  id        String   @id @default(uuid())
+  key       String
+  endpoint  String?
+  requests  Int      @default(0)
+  limit     Int      @default(100)
+  window    Int
+  resetAt   DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([key, endpoint])
+}
+
+model IpBlacklist {
+  id        String    @id @default(uuid())
+  ip        String    @unique
+  reason    String?
+  severity  String    @default("medium")
+  addedBy   String?
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model TokenBlacklist {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  tokenType String
+  userId    String?
+  reason    String?
+  revokedAt DateTime @default(now())
+  expiresAt DateTime
+}
+
+model RiskEvent {
+  id             String    @id @default(uuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eventType      String
+  severity       String
+  riskScore      Int
+  context        Json?
+  requiresStepUp Boolean   @default(false)
+  resolved       Boolean   @default(false)
+  resolvedAt     DateTime?
+  timestamp      DateTime  @default(now())
+
+  @@index([userId])
+  @@index([eventType])
+}
+
+// ============================================
+// QUEUE TABLES
+// ============================================
+
+model QueueJob {
+  id          String    @id @default(uuid())
+  externalId  String    @unique
+  queueName   String
+  data        Json
+  status      String
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3)
+  result      Json?
+  error       String?
+  priority    Int?
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  failedAt    DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([queueName])
+  @@index([status])
+}
+
+model QueueDLQ {
+  id            String    @id @default(uuid())
+  jobId         String
+  queueName     String
+  data          Json
+  error         String
+  errorType     String
+  attempts      Int
+  lastAttemptAt DateTime
+  archived      Boolean   @default(false)
+  archivedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([queueName])
+  @@index([errorType])
+}
+
+// ============================================
+// BUSINESS TABLES
+// ============================================
+
+model Product {
+  id            String      @id @default(uuid())
+  sku           String      @unique
+  name          String
+  description   String?
+  price         Decimal     @db.Decimal(10, 2)
+  cost          Decimal     @db.Decimal(10, 2)
+  stock         Int         @default(0)
+  lowStockAlert Int         @default(10)
+  isActive      Boolean     @default(true)
+  orderItems    OrderItem[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  deletedAt     DateTime?
+
+  @@index([sku])
+  @@index([isActive])
+}
+
+model Order {
+  id              String      @id @default(uuid())
+  orderNumber     String      @unique
+  userId          String?
+  status          String      @default("pending")
+  subtotal        Decimal     @default(0) @db.Decimal(10, 2)
+  tax             Decimal     @default(0) @db.Decimal(10, 2)
+  total           Decimal     @default(0) @db.Decimal(10, 2)
+  shippingAddress String?
+  shippingMethod  String?
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+  trackingNumber  String?
+  items           OrderItem[]
+  payment         Payment?
+  notes           String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([orderNumber])
+  @@index([userId])
+  @@index([status])
+}
+
+model OrderItem {
+  id        String   @id @default(uuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  quantity  Int
+  unitPrice Decimal  @db.Decimal(10, 2)
+  subtotal  Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now())
+
+  @@unique([orderId, productId])
+}
+
+model Payment {
+  id           String    @id @default(uuid())
+  orderId      String    @unique
+  order        Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  amount       Decimal   @db.Decimal(10, 2)
+  currency     String    @default("USD")
+  status       String    @default("pending")
+  method       String
+  paymentRef   String?
+  processedAt  DateTime?
+  refundedAt   DateTime?
+  refundAmount Decimal?  @db.Decimal(10, 2)
+  errorMessage String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([orderId])
+  @@index([status])
+}
+
+// ============================================
+// OBSERVABILITY TABLES
+// ============================================
+
+model Metric {
+  id        String   @id @default(uuid())
+  name      String
+  value     Float
+  unit      String
+  tags      Json?
+  timestamp DateTime @default(now())
+
+  @@index([name])
+  @@index([timestamp])
+}
+
+model AnomalyAlert {
+  id            String    @id @default(uuid())
+  metricName    String
+  baselineValue Float
+  currentValue  Float
+  changePercent Float
+  severity      String
+  isResolved    Boolean   @default(false)
+  resolvedAt    DateTime?
+  resolvedNotes String?
+  timestamp     DateTime  @default(now())
+
+  @@index([metricName])
+  @@index([timestamp])
+}
