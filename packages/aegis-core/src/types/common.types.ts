@@ -63,3 +63,8 @@ export type RedisConfig = {
   db?: number;
   keyPrefix?: string;
 };
+
+export type SerializationOptions = {
+  pretty?: boolean;
+  maxDepth?: number;
+};
