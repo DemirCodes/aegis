@@ -1,4 +1,4 @@
-import { logger } from '../utils/logger';
+import { logger } from '../utils/logger.js';
 
 export function Deprecated(message?: string) {
   return function (target: any, propertyKey: string, descriptor: PropertyDescriptor) {

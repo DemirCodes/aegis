@@ -1,2 +1,2 @@
-export * from './app-constants';
-export * from './error-codes';
+export * from './app-constants.js';
+export * from './error-codes.js';

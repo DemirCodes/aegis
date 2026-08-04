@@ -1,4 +1,4 @@
-import { delay } from './common-helpers';
+import { delay } from './common-helpers.js';
 
 export async function retry<T>(
   fn: () => Promise<T>,

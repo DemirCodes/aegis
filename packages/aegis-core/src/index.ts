@@ -8,7 +8,16 @@ export * from './types/errors.types.js';
 
 // Utils
 export { createLogger, logger } from './utils/logger.js';
-export { AppError, handleError } from './utils/error-handler.js';
+export { 
+  AppError, 
+  DatabaseError, 
+  NetworkError, 
+  AuthError, 
+  RateLimitError, 
+  NotFoundError,
+  handleError,
+  errorMiddleware 
+} from './utils/error-handler.js';
 export { loadEnv } from './utils/env-loader.js';
 export { delay, toJSON } from './utils/common-helpers.js';
 export { generateId, generateUUID } from './utils/id-generator.js';

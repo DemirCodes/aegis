@@ -8,6 +8,7 @@ export type AppErrorType = {
   statusCode: number;
   details?: Record<string, any>;
   originalError?: Error;
+  timestamp?: Date;
 };
 
 export type ErrorContext = {
