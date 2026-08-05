@@ -1,10 +1,11 @@
 // ============================================
-// @aegis/core - Logger (Winston Enhanced)
+// @aegis/core - Logger (Winston + Elasticsearch)
 // ============================================
 
 import winston from 'winston';
 import path from 'path';
 import fs from 'fs';
+import { ElasticsearchTransport } from 'winston-elasticsearch';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -16,6 +17,7 @@ export type LoggerOptions = {
   maxSize?: string;
   enableConsole?: boolean;
   enableFile?: boolean;
+  enableElasticsearch?: boolean;
 };
 
 export type Logger = {
@@ -26,11 +28,43 @@ export type Logger = {
   child: (meta: Record<string, any>) => Logger;
 };
 
+const sensitiveKeys = ['password', 'secret', 'token', 'key', 'authorization', 'credit'];
+
+function sanitizeMeta(meta?: any): any {
+  if (!meta) return meta;
+  if (typeof meta !== 'object') return meta;
+  
+  const sanitized = { ...meta };
+  for (const key of Object.keys(sanitized)) {
+    const lowerKey = key.toLowerCase();
+    if (sensitiveKeys.some((k) => lowerKey.includes(k))) {
+      sanitized[key] = '[REDACTED]';
+    }
+  }
+  return sanitized;
+}
+
+function createElasticsearchTransport(name: string) {
+  const esUrl = process.env.ELASTICSEARCH_URL || 'http://localhost:9200';
+  const indexPrefix = process.env.ELASTICSEARCH_INDEX_PREFIX || 'aegis-logs';
+
+  try {
+    return new ElasticsearchTransport({
+      level: 'info',
+      clientOpts: { node: esUrl },
+      indexPrefix: indexPrefix,
+      indexSuffixPattern: 'YYYY.MM.DD',
+    });
+  } catch (error) {
+    console.warn(`[${name}] Elasticsearch transport could not be created`);
+    return null;
+  }
+}
+
 function createTransports(options?: LoggerOptions) {
   const transports: winston.transport[] = [];
   const format = options?.format || 'pretty';
   
-  // Console transport
   if (options?.enableConsole !== false) {
     transports.push(
       new winston.transports.Console({
@@ -49,11 +83,8 @@ function createTransports(options?: LoggerOptions) {
     );
   }
 
-  // File transport
   if (options?.enableFile !== false) {
     const logDir = options?.logDir || path.join(process.cwd(), 'logs');
-    
-    // Ensure log directory exists
     if (!fs.existsSync(logDir)) {
       fs.mkdirSync(logDir, { recursive: true });
     }
@@ -62,7 +93,7 @@ function createTransports(options?: LoggerOptions) {
       new winston.transports.File({
         filename: path.join(logDir, 'error.log'),
         level: 'error',
-        maxsize: options?.maxSize ? parseSize(options.maxSize) : 10 * 1024 * 1024, // 10MB
+        maxsize: options?.maxSize ? parseSize(options.maxSize) : 10 * 1024 * 1024,
         maxFiles: options?.maxFiles || 5,
         format: winston.format.json(),
       }),
@@ -84,28 +115,37 @@ function parseSize(size: string): number {
   if (match) {
     return parseInt(match[1]) * (units[match[2]] || 1);
   }
-  return 10 * 1024 * 1024; // Default 10MB
+  return 10 * 1024 * 1024;
 }
 
 export function createLogger(name: string, options?: LoggerOptions): Logger {
   const level = options?.level || (process.env.LOG_LEVEL as LogLevel) || 'info';
+  const transports = createTransports(options);
+
+  if (options?.enableElasticsearch !== false && 
+      (process.env.NODE_ENV === 'production' || process.env.ELASTICSEARCH_ENABLED === 'true')) {
+    const esTransport = createElasticsearchTransport(name);
+    if (esTransport) {
+      transports.push(esTransport);
+    }
+  }
 
   const winstonLogger = winston.createLogger({
     level,
     defaultMeta: { service: name },
-    transports: createTransports(options),
+    transports,
   });
 
   return {
-    info: (message: string, meta?: any) => winstonLogger.info(message, meta),
+    info: (message: string, meta?: any) => winstonLogger.info(message, sanitizeMeta(meta)),
     error: (message: string, error?: Error, meta?: any) =>
       winstonLogger.error(message, {
         error: error?.message,
         stack: error?.stack,
-        ...meta,
+        ...sanitizeMeta(meta),
       }),
-    warn: (message: string, meta?: any) => winstonLogger.warn(message, meta),
-    debug: (message: string, meta?: any) => winstonLogger.debug(message, meta),
+    warn: (message: string, meta?: any) => winstonLogger.warn(message, sanitizeMeta(meta)),
+    debug: (message: string, meta?: any) => winstonLogger.debug(message, sanitizeMeta(meta)),
     child: (meta: Record<string, any>) => {
       const childLogger = winstonLogger.child(meta);
       return {
@@ -120,10 +160,10 @@ export function createLogger(name: string, options?: LoggerOptions): Logger {
   };
 }
 
-// Default logger instance
 export const logger: Logger = createLogger('aegis', {
   level: (process.env.LOG_LEVEL as LogLevel) || 'info',
   format: (process.env.LOG_FORMAT as 'json' | 'pretty') || 'pretty',
   enableConsole: true,
   enableFile: process.env.NODE_ENV === 'production',
+  enableElasticsearch: process.env.NODE_ENV === 'production' || process.env.ELASTICSEARCH_ENABLED === 'true',
 });

@@ -1,40 +1,36 @@
-import { PrismaClient } from '@prisma/client';
-import * as bcrypt from 'bcryptjs';
+import { PrismaPg } from '@prisma/adapter-pg'
+import { PrismaClient } from '../prisma/generated/client'
 
-const prisma = new PrismaClient();
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL || 'postgresql://aegis_user:aegis_pass@localhost:5432/aegis_dev' })
+const prisma = new PrismaClient({ adapter })
 
 async function main() {
-  console.log('🌱 Seeding database...');
+  console.log('🌱 Seeding database...')
 
-  // Clean up
-  await prisma.user.deleteMany();
-  await prisma.role.deleteMany();
-  await prisma.product.deleteMany();
+  await prisma.user.deleteMany()
+  await prisma.role.deleteMany()
 
-  // Create roles
   const adminRole = await prisma.role.create({
     data: {
       name: 'admin',
       description: 'Administrator',
-      permissions: ['*'],
+      permissions: '["*"]',
     },
-  });
+  })
 
   const userRole = await prisma.role.create({
     data: {
       name: 'user',
       description: 'Regular user',
-      permissions: ['read'],
+      permissions: '["read"]',
     },
-  });
+  })
 
-  // Create admin user
-  const adminPassword = await bcrypt.hash('admin123', 10);
   await prisma.user.create({
     data: {
       email: 'admin@aegis.local',
       username: 'admin',
-      password: adminPassword,
+      password: 'admin123',
       firstName: 'Admin',
       lastName: 'User',
       isActive: true,
@@ -43,11 +39,11 @@ async function main() {
         create: [{ roleId: adminRole.id }],
       },
     },
-  });
+  })
 
-  console.log('✅ Seed completed');
+  console.log('✅ Seed completed')
 }
 
 main()
   .catch((e) => console.error(e))
-  .finally(async () => await prisma.$disconnect());
+  .finally(async () => await prisma.$disconnect())
