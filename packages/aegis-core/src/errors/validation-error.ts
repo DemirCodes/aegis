@@ -1,5 +1,5 @@
-import { AppError } from './app-error.js';
-import { ErrorCodes } from './error-codes.js';
+import { AppError } from './app-error';
+import { ErrorCodes } from './error-codes';
 
 export class ValidationError extends AppError {
   public validationErrors: Array<{ path: string; message: string; code: string }>;

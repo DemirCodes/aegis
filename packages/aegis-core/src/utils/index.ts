@@ -1,4 +1,4 @@
-export { createLogger, logger } from './logger.js';
+export { createLogger, logger } from './logger';
 export { 
   AppError, 
   DatabaseError, 
@@ -8,8 +8,8 @@ export {
   NotFoundError,
   handleError,
   errorMiddleware 
-} from './error-handler.js';
-export { loadEnv } from './env-loader.js';
-export { delay, toJSON } from './common-helpers.js';
-export { generateId, generateUUID } from './id-generator.js';
-export { retry } from './retry.js';
+} from './error-handler';
+export { loadEnv } from './env-loader';
+export { delay, toJSON } from './common-helpers';
+export { generateId, generateUUID } from './id-generator';
+export { retry } from './retry';

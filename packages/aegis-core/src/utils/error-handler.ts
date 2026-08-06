@@ -1,5 +1,5 @@
-import { AppErrorType, ErrorContext } from '../types/errors.types.js';
-import { logger } from './logger.js';
+import { AppErrorType, ErrorContext } from '../types/errors.types';
+import { logger } from './logger';
 
 export class AppError extends Error {
   public code: string;

@@ -1,2 +1,2 @@
-export * from './common.types.js';
-export * from './errors.types.js';
+export * from './common.types';
+export * from './errors.types';

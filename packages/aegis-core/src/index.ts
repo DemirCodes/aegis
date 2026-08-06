@@ -3,11 +3,11 @@
 // ============================================
 
 // Types
-export * from './types/common.types.js';
-export * from './types/errors.types.js';
+export * from './types/common.types';
+export * from './types/errors.types';
 
 // Utils
-export { createLogger, logger } from './utils/logger.js';
+export { createLogger, logger } from './utils/logger';
 export { 
   AppError, 
   DatabaseError, 
@@ -17,20 +17,20 @@ export {
   NotFoundError,
   handleError,
   errorMiddleware 
-} from './utils/error-handler.js';
-export { loadEnv } from './utils/env-loader.js';
-export { delay, toJSON } from './utils/common-helpers.js';
-export { generateId, generateUUID } from './utils/id-generator.js';
-export { retry } from './utils/retry.js';
+} from './utils/error-handler';
+export { loadEnv } from './utils/env-loader';
+export { delay, toJSON } from './utils/common-helpers';
+export { generateId, generateUUID } from './utils/id-generator';
+export { retry } from './utils/retry';
 
 // Constants
-export * from './constants/app-constants.js';
-export * from './constants/error-codes.js';
+export * from './constants/app-constants';
+export * from './constants/error-codes';
 
 // Errors
-export { AppError as CoreAppError } from './errors/app-error.js';
-export { ValidationError } from './errors/validation-error.js';
-export { ErrorCodes } from './errors/error-codes.js';
+export { AppError as CoreAppError } from './errors/app-error';
+export { ValidationError } from './errors/validation-error';
+export { ErrorCodes } from './errors/error-codes';
 
 // Decorators
-export { Deprecated } from './decorators/deprecated.decorator.js';
+export { Deprecated } from './decorators/deprecated.decorator';

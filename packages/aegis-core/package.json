@@ -2,7 +2,6 @@
   "name": "@aegis/core",
   "version": "0.1.0",
   "description": "AEGIS Core - Shared utilities, types, logger and error handling",
-  "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
