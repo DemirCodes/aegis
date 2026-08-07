@@ -1,9 +1,9 @@
 // ============================================
-// @aegis/audit - Audit Report Service
+// @aegis/audit - Audit Report Service (Enhanced)
 // ============================================
 
 import { PrismaClient } from '@prisma/client';
-import { logger, toJSON } from '@aegis/core';
+import { logger, toJSON, AppError } from '@aegis/core';
 
 interface SummaryReport {
   period: { startDate: Date; endDate: Date };
@@ -40,6 +40,7 @@ interface HourlyActivity {
 }
 
 export class AuditReportService {
+  private readonly MAX_LIMIT = 100;
   private prisma: PrismaClient;
 
   constructor(prisma: PrismaClient) {
@@ -47,6 +48,9 @@ export class AuditReportService {
   }
 
   async generateSummaryReport(startDate: Date, endDate: Date): Promise<SummaryReport> {
+    if (!startDate || !endDate) throw new AppError('VALIDATION_ERROR', 'startDate and endDate are required', 400);
+    if (startDate > endDate) throw new AppError('VALIDATION_ERROR', 'startDate cannot be after endDate', 400);
+
     logger.info('Generating summary report', { startDate, endDate });
 
     const logs = await this.prisma.auditLog.findMany({
@@ -68,7 +72,7 @@ export class AuditReportService {
       dailyActivity[day] = (dailyActivity[day] || 0) + 1;
     }
 
-    return {
+    const report: SummaryReport = {
       period: { startDate, endDate },
       totalActions,
       actionBreakdown,
@@ -77,14 +81,19 @@ export class AuditReportService {
       dailyActivity,
       generatedAt: new Date(),
     };
+
+    logger.info('Summary report generated', { totalActions });
+    return report;
   }
 
   async getMostActiveUsers(limit: number = 10): Promise<ActiveUser[]> {
+    const safeLimit = Math.min(this.MAX_LIMIT, Math.max(1, limit));
+
     const result = await this.prisma.auditLog.groupBy({
       by: ['userId'],
       _count: { id: true },
       orderBy: { _count: { id: 'desc' } },
-      take: limit,
+      take: safeLimit,
     });
 
     return result.map((item: { userId: string | null; _count: { id: number } }) => ({
@@ -94,11 +103,13 @@ export class AuditReportService {
   }
 
   async getMostChangedEntities(limit: number = 10): Promise<ChangedEntity[]> {
+    const safeLimit = Math.min(this.MAX_LIMIT, Math.max(1, limit));
+
     const result = await this.prisma.auditLog.groupBy({
       by: ['entityType'],
       _count: { id: true },
       orderBy: { _count: { id: 'desc' } },
-      take: limit,
+      take: safeLimit,
     });
 
     return result.map((item: { entityType: string; _count: { id: number } }) => ({
@@ -108,12 +119,14 @@ export class AuditReportService {
   }
 
   async getFailedAuditLogs(limit: number = 100): Promise<FailedAuditLogEntry[]> {
-    logger.warn('Fetching failed audit logs', { limit });
+    const safeLimit = Math.min(500, Math.max(1, limit));
+
+    logger.warn('Fetching failed audit logs', { limit: safeLimit });
 
     const logs = await this.prisma.auditLog.findMany({
       where: { status: 'failed' },
       orderBy: { timestamp: 'desc' },
-      take: limit,
+      take: safeLimit,
       select: { id: true, userId: true, entityType: true, action: true, errorMessage: true, timestamp: true },
     });
 
