@@ -2,11 +2,12 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": "..",
     "paths": {
-      "@aegis/core": ["../aegis-core/src/index.ts"]
+      "@aegis/core": ["../aegis-core/src/index.ts"],
+      "@prisma/client": ["../../prisma/generated/client"]
     }
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "../aegis-core/src/**/*"],
   "exclude": ["node_modules", "dist", "tests"]
 }

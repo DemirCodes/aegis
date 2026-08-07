@@ -2,7 +2,7 @@
 // @aegis/audit - Audit Report Service
 // ============================================
 
-import { PrismaClient } from '../../../../prisma/generated/client';
+import { PrismaClient } from '@prisma/client';
 import { logger, toJSON } from '@aegis/core';
 
 interface SummaryReport {
