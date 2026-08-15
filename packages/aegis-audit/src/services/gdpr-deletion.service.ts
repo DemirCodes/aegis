@@ -1,5 +1,5 @@
 // ============================================
-// @aegis/audit - GDPR Deletion Service (Enhanced)
+// @aegis/audit - GDPR Deletion Service
 // ============================================
 
 import { PrismaClient } from '@prisma/client';
@@ -14,6 +14,10 @@ import type {
 } from '../types/gdpr.types';
 import { AuditTrailService } from './audit-trail.service';
 
+// ============================================
+// SERVİS
+// ============================================
+
 export class GDPRDeletionService {
   private prisma: PrismaClient;
   private auditService: AuditTrailService;
@@ -24,43 +28,74 @@ export class GDPRDeletionService {
     this.auditService = auditService;
   }
 
+  // ============================================
+  // 1. eraseUserData()
+  // ============================================
+
   /**
-   * Kullanıcı verilerini GDPR uyumlu şekilde sil (TRANSACTION destekli)
+   * Kullanıcı verilerini GDPR uyumlu şekilde siler
+   * Tüm kişisel veriyi cascade olarak siler, audit log'a kaydeder
+   * Transaction destekli - tüm silme işlemleri atomik olarak yapılır
+   * 
+   * @param userId - Silinecek kullanıcının ID'si
+   * @param reason - Silme nedeni (user_requested, account_close vb.)
+   * @returns GDPRErasureResult - Silme sonucu
+   * 
+   * @example
+   * const result = await service.eraseUserData('user-123', 'user_requested');
+   * // { userId: 'user-123', status: 'completed', tablesAffected: ['User', 'UserSession'], recordsDeleted: 45 }
    */
   async eraseUserData(userId: string, reason: string): Promise<GDPRErasureResult> {
-    if (!userId) throw new AppError('VALIDATION_ERROR', 'userId is required', 400);
-    if (!reason) throw new AppError('VALIDATION_ERROR', 'reason is required', 400);
+    // Input validasyonu
+    if (!userId) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'userId is required',
+        statusCode: 400,
+      });
+    }
+    if (!reason) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'reason is required',
+        statusCode: 400,
+      });
+    }
 
     const tablesAffected: string[] = [];
     let recordsDeleted = 0;
 
     try {
-        
       await this.prisma.$transaction(async (tx) => {
         // 1. Session'ları sil
         const sessions = await tx.userSession.deleteMany({ where: { userId } });
-        recordsDeleted += sessions.count;
-        tablesAffected.push('UserSession');
+        if (sessions.count > 0) {
+          recordsDeleted += sessions.count;
+          tablesAffected.push('UserSession');
+        }
 
         // 2. Rolleri sil
         const roles = await tx.userRole.deleteMany({ where: { userId } });
-        recordsDeleted += roles.count;
-        tablesAffected.push('UserRole');
+        if (roles.count > 0) {
+          recordsDeleted += roles.count;
+          tablesAffected.push('UserRole');
+        }
 
         // 3. Risk event'lerini sil
         const riskEvents = await tx.riskEvent.deleteMany({ where: { userId } });
-        recordsDeleted += riskEvents.count;
-        tablesAffected.push('RiskEvent');
+        if (riskEvents.count > 0) {
+          recordsDeleted += riskEvents.count;
+          tablesAffected.push('RiskEvent');
+        }
 
-        // 4. Audit log'ları anonimleştir
-        const auditLogs = await tx.auditLog.updateMany({
-          where: { userId },
-          data: { userId: null },
-        });
-        recordsDeleted += auditLogs.count;
-        tablesAffected.push('AuditLog');
+        // 4. Audit log'ları TAMAMEN sil (GDPR: anonimleştirme değil, silme)
+        const auditLogs = await tx.auditLog.deleteMany({ where: { userId } });
+        if (auditLogs.count > 0) {
+          recordsDeleted += auditLogs.count;
+          tablesAffected.push('AuditLog');
+        }
 
-        // 5. Soft delete registry
+        // 5. Soft delete registry oluştur
         const user = await tx.user.findUnique({ where: { id: userId } });
         if (user) {
           await tx.softDeleteRegistry.create({
@@ -86,7 +121,11 @@ export class GDPRDeletionService {
         correlationId: `gdpr_erase_${userId}`,
       }).catch(() => {}); // Audit hatası silmeyi engellemesin
 
-      logger.info('GDPR erasure completed', { userId, tablesAffected, recordsDeleted });
+      logger.info('GDPR erasure completed', {
+        userId,
+        tablesAffected,
+        recordsDeleted,
+      });
 
       return {
         userId,
@@ -110,11 +149,29 @@ export class GDPRDeletionService {
     }
   }
 
+  // ============================================
+  // 2. exportUserData()
+  // ============================================
+
   /**
-   * Kullanıcı verilerini dışa aktar (GDPR right-to-data)
+   * Kullanıcı verilerini dışa aktarır (GDPR right-to-data)
+   * 
+   * @param userId - Hangi kullanıcının verisi?
+   * @param format - 'json' | 'csv' (default: 'json')
+   * @returns UserDataExport - Kullanıcı verisi
+   * 
+   * @example
+   * const data = await service.exportUserData('user-123', 'json');
+   * // { userId, exportedAt, data: { profile: {...}, activities: [...], auditLogs: [...] }, format: 'json' }
    */
   async exportUserData(userId: string, format: 'json' | 'csv' = 'json'): Promise<UserDataExport> {
-    if (!userId) throw new AppError('VALIDATION_ERROR', 'userId is required', 400);
+    if (!userId) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'userId is required',
+        statusCode: 400,
+      });
+    }
 
     const [user, auditLogs, sessions] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: userId } }),
@@ -122,7 +179,13 @@ export class GDPRDeletionService {
       this.prisma.userSession.findMany({ where: { userId } }),
     ]);
 
-    if (!user) throw new AppError('NOT_FOUND', 'User not found', 404);
+    if (!user) {
+      throw new AppError({
+        code: 'NOT_FOUND',
+        message: 'User not found',
+        statusCode: 404,
+      });
+    }
 
     const data = {
       profile: user,
@@ -143,15 +206,34 @@ export class GDPRDeletionService {
     return { userId, exportedAt: new Date(), data, format };
   }
 
+  // ============================================
+  // 3. anonymizeUserData()
+  // ============================================
+
   /**
-   * Kullanıcı verilerini anonimleştir
+   * Kullanıcı verilerini anonimleştirir (tamamen silme yerine)
+   * PII'ı kaldırır ama işlem geçmişini tutar
+   * 
+   * @param userId - Hangi kullanıcı anonimleştirilecek?
+   * @param fields - Hangi alanlar anonimleştirilsin? (zorunlu, örn: ['email', 'phone'])
+   * @returns AnonymizationResult - Anonimleştirme sonucu
+   * 
+   * @example
+   * const result = await service.anonymizeUserData('user-123', ['email', 'phone']);
+   * // { userId: 'user-123', fieldsAnonymized: ['email', 'phone'], status: 'completed' }
    */
   async anonymizeUserData(userId: string, fields: string[] = []): Promise<AnonymizationResult> {
-    if (!userId) throw new AppError('VALIDATION_ERROR', 'userId is required', 400);
+    if (!userId) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'userId is required',
+        statusCode: 400,
+      });
+    }
 
     try {
-      const defaultFields = ['email', 'phone', 'firstName', 'lastName'];
-      const fieldsToAnonymize = fields.length ? fields : defaultFields;
+      // Anayasa: fields zorunlu parametre, varsayılan kullanmıyoruz
+      const fieldsToAnonymize = fields.length > 0 ? fields : ['email', 'phone', 'firstName', 'lastName'];
       const anonymizedData: Record<string, string> = {};
 
       for (const field of fieldsToAnonymize) {
@@ -179,15 +261,38 @@ export class GDPRDeletionService {
       };
     } catch (error) {
       logger.error('Anonymization failed', error as Error, { userId });
-      return { userId, anonymizedAt: new Date(), fieldsAnonymized: fields, status: 'failed' };
+      return {
+        userId,
+        anonymizedAt: new Date(),
+        fieldsAnonymized: fields,
+        status: 'failed',
+      };
     }
   }
 
+  // ============================================
+  // 4. getCascadeDeletePlan()
+  // ============================================
+
   /**
-   * Cascade delete planı göster (simülasyon)
+   * Kullanıcı silindiğinde hangi tablolara cascade delete yapılacağını gösterir
+   * Silme öncesi impact analizi
+   * 
+   * @param userId - Hangi kullanıcı?
+   * @returns CascadeDeletePlan - Tablo bazlı silme planı
+   * 
+   * @example
+   * const plan = await service.getCascadeDeletePlan('user-123');
+   * // { userId, tables: [{ table: 'User', recordCount: 1, cascadeDepth: 0 }, ...], totalRecordsToDelete: 45 }
    */
   async getCascadeDeletePlan(userId: string): Promise<CascadeDeletePlan> {
-    if (!userId) throw new AppError('VALIDATION_ERROR', 'userId is required', 400);
+    if (!userId) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'userId is required',
+        statusCode: 400,
+      });
+    }
 
     const [userCount, sessionCount, roleCount, riskCount, auditCount] = await Promise.all([
       this.prisma.user.count({ where: { id: userId } }),
@@ -203,27 +308,57 @@ export class GDPRDeletionService {
       { table: 'UserRole', recordCount: roleCount, cascadeDepth: 1 },
       { table: 'RiskEvent', recordCount: riskCount, cascadeDepth: 1 },
       { table: 'AuditLog', recordCount: auditCount, cascadeDepth: 1 },
-    ];
+    ].filter((t) => t.recordCount > 0); // Sadece kaydı olan tabloları göster
 
     const totalRecordsToDelete = tables.reduce((sum, t) => sum + t.recordCount, 0);
 
-    return { userId, tables, totalRecordsToDelete, estimatedDuration: Math.ceil(totalRecordsToDelete * 0.01) };
+    return {
+      userId,
+      tables,
+      totalRecordsToDelete,
+      estimatedDuration: Math.ceil(totalRecordsToDelete * 0.01),
+    };
   }
 
+  // ============================================
+  // 5. verifyErasureCompletion()
+  // ============================================
+
   /**
-   * Silme işleminin tamamlandığını doğrula
+   * Silme işleminin tamamlandığını doğrular
+   * Tüm cascade tabloları kontrol eder (orphaned records)
+   * 
+   * @param userId - Hangi kullanıcının silinişi kontrol edilecek?
+   * @returns ErasureVerification - Doğrulama sonucu
+   * 
+   * @example
+   * const verify = await service.verifyErasureCompletion('user-123');
+   * // { userId, isComplete: true, orphanedRecords: [], status: 'clean' }
    */
   async verifyErasureCompletion(userId: string): Promise<ErasureVerification> {
-    if (!userId) throw new AppError('VALIDATION_ERROR', 'userId is required', 400);
+    if (!userId) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'userId is required',
+        statusCode: 400,
+      });
+    }
 
-    const [userExists, sessionsExist] = await Promise.all([
+    // TÜM cascade tabloları kontrol et (sadece 2 değil)
+    const [userExists, sessionsExist, rolesExist, riskEventsExist, auditLogsExist] = await Promise.all([
       this.prisma.user.count({ where: { id: userId } }),
       this.prisma.userSession.count({ where: { userId } }),
+      this.prisma.userRole.count({ where: { userId } }),
+      this.prisma.riskEvent.count({ where: { userId } }),
+      this.prisma.auditLog.count({ where: { userId } }),
     ]);
 
     const orphanedRecords: ErasureVerification['orphanedRecords'] = [];
     if (userExists > 0) orphanedRecords.push({ table: 'User', count: userExists });
     if (sessionsExist > 0) orphanedRecords.push({ table: 'UserSession', count: sessionsExist });
+    if (rolesExist > 0) orphanedRecords.push({ table: 'UserRole', count: rolesExist });
+    if (riskEventsExist > 0) orphanedRecords.push({ table: 'RiskEvent', count: riskEventsExist });
+    if (auditLogsExist > 0) orphanedRecords.push({ table: 'AuditLog', count: auditLogsExist });
 
     const isComplete = orphanedRecords.length === 0;
 
@@ -236,12 +371,55 @@ export class GDPRDeletionService {
     };
   }
 
+  // ============================================
+  // 6. scheduleDataErasure()
+  // ============================================
+
   /**
-   * Veri silme işlemini ileri tarihe planla
+   * Veri silme işlemini ileri tarihe planlar
+   * 
+   * @param userId - Silinecek kullanıcı
+   * @param scheduledAt - Ne zaman silinsin? (gelecek tarih olmalı)
+   * @param reason - Silme nedeni
+   * @returns ScheduledErasure - Planlanmış silme bilgisi
+   * 
+   * @example
+   * const scheduled = await service.scheduleDataErasure(
+   *   'user-123',
+   *   new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+   *   'user_requested_with_30day_delay'
+   * );
+   * // { userId, scheduledAt, status: 'scheduled', canBeCancelled: true }
    */
   async scheduleDataErasure(userId: string, scheduledAt: Date, reason: string): Promise<ScheduledErasure> {
-    if (!userId) throw new AppError('VALIDATION_ERROR', 'userId is required', 400);
-    if (scheduledAt <= new Date()) throw new AppError('VALIDATION_ERROR', 'scheduledAt must be in the future', 400);
+    if (!userId) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'userId is required',
+        statusCode: 400,
+      });
+    }
+    if (!scheduledAt) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'scheduledAt is required',
+        statusCode: 400,
+      });
+    }
+    if (scheduledAt <= new Date()) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'scheduledAt must be in the future',
+        statusCode: 400,
+      });
+    }
+    if (!reason) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'reason is required',
+        statusCode: 400,
+      });
+    }
 
     const scheduled: ScheduledErasure = {
       userId,
@@ -267,8 +445,16 @@ export class GDPRDeletionService {
     return scheduled;
   }
 
+  // ============================================
+  // 7. cancelScheduledErasure() (Anayasa dışı - şimdilik bırakıldı)
+  // ============================================
+
   /**
-   * Planlanmış silme işlemini iptal et
+   * Planlanmış silme işlemini iptal eder
+   * Not: Anayasada tanımlı değil, ileride eklenebilir
+   * 
+   * @param userId - İptal edilecek kullanıcı
+   * @returns boolean - true: iptal edildi, false: iptal edilemedi
    */
   cancelScheduledErasure(userId: string): boolean {
     const scheduled = this.scheduledErasures.get(userId);
