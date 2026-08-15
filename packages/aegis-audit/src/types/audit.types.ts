@@ -85,3 +85,14 @@ export type AuditedOptions = {
   sensitive?: boolean;              // Hassas veri modu açık mı?
   customFields?: Record<string, any>; // Ekstra metadata alanları
 };
+
+
+// Bulk create için input tipi
+export type BulkCreateAuditLogInput = {
+  userId: string;
+  entityType: string;
+  action: AuditAction;
+  changes: Record<string, any>;
+  metadata?: AuditMetadata;
+};
+

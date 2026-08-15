@@ -1,6 +1,5 @@
 // ============================================
 // @aegis/audit - Audit Trail Service
-// TIER 1 Anayasasına Uygun Güçlendirilmiş
 // ============================================
 
 import { PrismaClient } from '@prisma/client';
@@ -16,6 +15,7 @@ import type {
   ExportFormat,
   AuditMetadata,
   AuditAction,
+  BulkCreateAuditLogInput,
 } from '../types/audit.types';
 import {
   generateAuditId,
@@ -41,6 +41,7 @@ export class AuditTrailService {
   private readonly MAX_PAGE_SIZE = 100;
   private readonly DEFAULT_PAGE_SIZE = 20;
   private readonly MAX_ACTIVITY_LIMIT = 100; // Anayasa: limit default 100
+  private readonly MAX_BULK_SIZE = 1000;     // Toplu yazımda üst limit
 
   private prisma: PrismaClient;
   private sensitiveFields: string[];
@@ -64,6 +65,22 @@ export class AuditTrailService {
   /**
    * Yeni audit log oluştur
    * Başarısız olursa status: 'failed' olarak kaydetmeyi dener
+   * 
+   * @param userId - İşlemi yapan kullanıcı ID'si
+   * @param entityType - Entity tipi (User, Product, Order)
+   * @param action - İşlem tipi (CREATE, UPDATE, DELETE)
+   * @param changes - Değişiklikler
+   * @param metadata - IP, User-Agent, correlationId gibi ek bilgiler
+   * @returns AuditLog - Oluşturulan log kaydı
+   * 
+   * @example
+   * const log = await service.createAuditLog(
+   *   'user-123',
+   *   'User',
+   *   'UPDATE',
+   *   { email: { old: 'old@email.com', new: 'new@email.com' } },
+   *   { ipAddress: '192.168.1.1' }
+   * );
    */
   async createAuditLog(
     userId: string,
@@ -182,6 +199,16 @@ export class AuditTrailService {
 
   /**
    * Audit log'ları sorgula (filtrele, sırala, sayfala)
+   * 
+   * @param filters - Filtreleme kriterleri (userId, entityType, tarih aralığı vb.)
+   * @param pagination - Sayfalama seçenekleri (page, pageSize, sort)
+   * @returns PaginatedAuditLogs - Sayfalanmış sonuç
+   * 
+   * @example
+   * const logs = await service.getAuditLogs(
+   *   { userId: 'user-123', startDate: new Date('2024-01-01') },
+   *   { page: 1, pageSize: 50, sort: ['timestamp:desc'] }
+   * );
    */
   async getAuditLogs(
     filters: AuditFilters = {},
@@ -238,6 +265,13 @@ export class AuditTrailService {
 
   /**
    * ID ile audit log getir
+   * 
+   * @param auditLogId - Audit log'un unique ID'si
+   * @returns AuditLog | null - Bulunursa log, bulunamazsa null
+   * 
+   * @example
+   * const log = await service.getAuditLogById('audit_123abc');
+   * if (log) console.log(log.action); // 'UPDATE'
    */
   async getAuditLogById(auditLogId: string): Promise<AuditLog | null> {
     if (!auditLogId) {
@@ -262,6 +296,17 @@ export class AuditTrailService {
   /**
    * Audit trail'ı dışa aktar (JSON, CSV, PDF)
    * PDF: gerçek PDF formatında (pdfkit ile)
+   * 
+   * @param filters - Hangi log'lar export edilecek?
+   * @param format - Export formatı ('json' | 'csv' | 'pdf')
+   * @returns Buffer - Dosya içeriği (binary data)
+   * 
+   * @example
+   * const pdfBuffer = await service.exportAuditTrail(
+   *   { userId: 'user-123', startDate: new Date('2024-01-01') },
+   *   'pdf'
+   * );
+   * // PDF'i email'e ekle veya dosyaya kaydet
    */
   async exportAuditTrail(
     filters: AuditFilters,
@@ -297,6 +342,13 @@ export class AuditTrailService {
   /**
    * Kullanıcının aktivite geçmişini getir
    * Anayasa: limit default 100
+   * 
+   * @param userId - Hangi kullanıcı?
+   * @param options - limit, includeFailures, entityFilters
+   * @returns UserActivityLog[] - Kronolojik aktivite listesi
+   * 
+   * @example
+   * const history = await service.getUserActivityHistory('user-123', { limit: 10 });
    */
   async getUserActivityHistory(
     userId: string,
@@ -348,6 +400,13 @@ export class AuditTrailService {
   /**
    * Entity'nin değişiklik geçmişini getir
    * Validasyonu güçlendirildi
+   * 
+   * @param entityType - Entity tipi (User, Product, Order)
+   * @param entityId - Entity'nin unique ID'si
+   * @returns AuditLog[] - Entity'ye ait tüm log'lar
+   * 
+   * @example
+   * const history = await service.getEntityHistory('Product', 'prod-123');
    */
   async getEntityHistory(
     entityType: string,
@@ -388,6 +447,13 @@ export class AuditTrailService {
   /**
    * Audit log'larda arama
    * Performans iyileştirmesi: changesSummary üzerinde odaklı arama
+   * 
+   * @param query - Arama terimi (user email, ürün adı vb.)
+   * @param filters - Ek filtreler (tarih, entity type vb.)
+   * @returns AuditLog[] - Eşleşen log'lar
+   * 
+   * @example
+   * const results = await service.searchAuditLogs('user@email.com');
    */
   async searchAuditLogs(
     query: string,
@@ -432,6 +498,247 @@ export class AuditTrailService {
     });
 
     return logs.map((log) => this.mapToAuditLog(log));
+  }
+
+  // ============================================
+  // 8. retryFailedAuditLog() ★ YENİ
+  // ============================================
+
+  /**
+   * Başarısız (failed) audit log'u tekrar yazmayı dener
+   * Self-healing mekanizması
+   * 
+   * @param auditLogId - Failed log'un ID'si
+   * @returns boolean - true: başarıyla tekrar yazıldı, false: yazılamadı
+   * 
+   * @example
+   * const retried = await service.retryFailedAuditLog('audit_123abc');
+   * if (retried) {
+   *   console.log('Log başarıyla tekrar yazıldı');
+   * }
+   */
+  async retryFailedAuditLog(auditLogId: string): Promise<boolean> {
+    if (!auditLogId) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'auditLogId is required',
+        statusCode: 400,
+      });
+    }
+
+    // Failed log'u bul
+    const failedLog = await this.prisma.auditLog.findUnique({
+      where: { id: auditLogId },
+    });
+
+    if (!failedLog) {
+      logger.warn('Failed audit log not found', { auditLogId });
+      return false;
+    }
+
+    // Zaten completed ise retry gerekmez
+    if (failedLog.status === 'completed') {
+      logger.info('Audit log already completed, no retry needed', { auditLogId });
+      return false;
+    }
+
+    try {
+      // Yeni kayıt oluştur (completed olarak)
+      await this.prisma.auditLog.create({
+        data: {
+          id: generateAuditId(), // Yeni ID
+          userId: failedLog.userId,
+          entityType: failedLog.entityType,
+          entityId: failedLog.entityId,
+          action: failedLog.action,
+          changes: failedLog.changes,
+          changesSummary: failedLog.changesSummary,
+          ipAddress: failedLog.ipAddress,
+          userAgent: failedLog.userAgent,
+          correlationId: failedLog.correlationId,
+          metadata: failedLog.metadata,
+          status: 'completed',
+        },
+      });
+
+      // Eski failed kaydı sil
+      await this.prisma.auditLog.delete({
+        where: { id: auditLogId },
+      });
+
+      logger.info('Failed audit log retried successfully', {
+        oldId: auditLogId,
+        userId: failedLog.userId,
+        entityType: failedLog.entityType,
+      });
+
+      return true;
+    } catch (error) {
+      logger.error('Failed to retry audit log', error as Error, { auditLogId });
+      return false;
+    }
+  }
+
+  // ============================================
+  // 9. purgeOldAuditLogs() ★ YENİ
+  // ============================================
+
+  /**
+   * Belirli tarihten daha eski audit log'ları siler
+   * GDPR data retention policy için kullanılır
+   * 
+   * @param olderThan - Bu tarihten önceki log'lar silinsin
+   * @returns number - Silinen toplam kayıt sayısı
+   * 
+   * @example
+   * // 90 günden eski log'ları sil
+   * const deletedCount = await service.purgeOldAuditLogs(
+   *   new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
+   * );
+   * console.log(`${deletedCount} eski log silindi`);
+   */
+  async purgeOldAuditLogs(olderThan: Date): Promise<number> {
+    // Validasyon
+    if (!olderThan) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'olderThan is required',
+        statusCode: 400,
+      });
+    }
+
+    // Gelecek tarih olamaz
+    if (olderThan > new Date()) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'olderThan cannot be in the future',
+        statusCode: 400,
+      });
+    }
+
+    const result = await this.prisma.auditLog.deleteMany({
+      where: {
+        timestamp: { lt: olderThan },
+      },
+    });
+
+    logger.info('Old audit logs purged', {
+      olderThan,
+      deletedCount: result.count,
+    });
+
+    return result.count;
+  }
+
+  // ============================================
+  // 10. getAuditLogByCorrelationId() ★ YENİ
+  // ============================================
+
+  /**
+   * Aynı correlationId'ye sahip tüm audit log'ları getirir
+   * Bir request'in tüm audit izini sürmek için
+   * 
+   * @param correlationId - Request trace ID'si
+   * @returns AuditLog[] - Aynı correlationId'ye sahip log'lar (kronolojik)
+   * 
+   * @example
+   * const logs = await service.getAuditLogByCorrelationId('trace-xyz-123');
+   * // Aynı request'in tüm log'ları
+   */
+  async getAuditLogByCorrelationId(
+    correlationId: string,
+  ): Promise<AuditLog[]> {
+    if (!correlationId || correlationId.trim().length === 0) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'correlationId is required',
+        statusCode: 400,
+      });
+    }
+
+    const logs = await this.prisma.auditLog.findMany({
+      where: { correlationId: correlationId.trim() },
+      orderBy: { timestamp: 'asc' }, // Kronolojik sıra
+      take: 500,
+    });
+
+    return logs.map((log) => this.mapToAuditLog(log));
+  }
+
+  // ============================================
+  // 11. bulkCreateAuditLogs() ★ YENİ
+  // ============================================
+
+  /**
+   * Birden fazla audit log'u tek seferde yazar (performans)
+   * Toplu işlemler için createMany kullanır
+   * 
+   * @param logs - Yazılacak log'ların listesi (max: 1000)
+   * @returns number - Başarıyla yazılan kayıt sayısı
+   * 
+   * @example
+   * const count = await service.bulkCreateAuditLogs([
+   *   { userId: 'user-1', entityType: 'User', action: 'CREATE', changes: { name: { old: null, new: 'Ali' } } },
+   *   { userId: 'user-2', entityType: 'Product', action: 'UPDATE', changes: { price: { old: 100, new: 150 } } },
+   * ]);
+   * console.log(`${count} log yazıldı`);
+   */
+  async bulkCreateAuditLogs(
+    logs: BulkCreateAuditLogInput[],
+  ): Promise<number> {
+    // Validasyon
+    if (!logs || logs.length === 0) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'logs array is required and cannot be empty',
+        statusCode: 400,
+      });
+    }
+
+    // Max limit kontrolü
+    if (logs.length > this.MAX_BULK_SIZE) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: `Maximum ${this.MAX_BULK_SIZE} logs can be written at once`,
+        statusCode: 400,
+      });
+    }
+
+    // Her log'u hazırla
+    const preparedLogs = logs.map((log) => {
+      const id = generateAuditId();
+      const changesSummary = generateChangesSummary(log.changes);
+      const maskedChanges = maskSensitiveData(log.changes, this.sensitiveFields);
+      const entityId = log.metadata?.customFields?.entityId || 'unknown';
+
+      return {
+        id,
+        userId: log.userId,
+        entityType: log.entityType,
+        entityId,
+        action: log.action,
+        changes: JSON.stringify(maskedChanges),
+        changesSummary,
+        ipAddress: log.metadata?.ipAddress || null,
+        userAgent: log.metadata?.userAgent || null,
+        correlationId: log.metadata?.correlationId || null,
+        metadata: log.metadata?.customFields
+          ? JSON.stringify(log.metadata.customFields)
+          : null,
+        status: 'completed',
+      };
+    });
+
+    const result = await this.prisma.auditLog.createMany({
+      data: preparedLogs,
+    });
+
+    logger.info('Bulk audit logs created', {
+      requested: logs.length,
+      written: result.count,
+    });
+
+    return result.count;
   }
 
   // ============================================
