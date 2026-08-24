@@ -18,8 +18,6 @@ const config: Config = {
   testPathIgnorePatterns: [
     '/node_modules/',
     'tests/unit/audit-trail.test.ts',
-    'tests/unit/gdpr-deletion.test.ts',
-    'tests/gdpr.test.ts',
   ],
 
   // ts-jest ile TypeScript dönüşümü
@@ -28,6 +26,8 @@ const config: Config = {
   },
 
   passWithNoTests: true,
+  forceExit: true, 
+  maxWorkers: 1,
 
   // Test ortamı
   testEnvironment: 'node',
@@ -56,6 +56,7 @@ const config: Config = {
 
   // Verbose çıktı (hangi test geçti/başarısız oldu)
   verbose: true,
+  
 };
 
 export default config;

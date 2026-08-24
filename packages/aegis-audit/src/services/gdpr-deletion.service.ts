@@ -14,6 +14,7 @@ import type {
 } from '../types/gdpr.types';
 import { AuditTrailService } from './audit-trail.service';
 
+
 // ============================================
 // SERVİS
 // ============================================
@@ -22,6 +23,7 @@ export class GDPRDeletionService {
   private prisma: PrismaClient;
   private auditService: AuditTrailService;
   private scheduledErasures: Map<string, ScheduledErasure> = new Map();
+  private scheduledTimers: Map<string, NodeJS.Timeout> = new Map(); 
 
   constructor(prisma: PrismaClient, auditService: AuditTrailService) {
     this.prisma = prisma;
@@ -391,7 +393,7 @@ export class GDPRDeletionService {
    * );
    * // { userId, scheduledAt, status: 'scheduled', canBeCancelled: true }
    */
-  async scheduleDataErasure(userId: string, scheduledAt: Date, reason: string): Promise<ScheduledErasure> {
+    async scheduleDataErasure(userId: string, scheduledAt: Date, reason: string): Promise<ScheduledErasure> {
     if (!userId) {
       throw new AppError({
         code: 'VALIDATION_ERROR',
@@ -434,31 +436,34 @@ export class GDPRDeletionService {
 
     const delay = scheduledAt.getTime() - Date.now();
     if (delay > 0) {
-      setTimeout(async () => {
+      // ★ Timer'ı kaydet
+      const timer = setTimeout(async () => {
         await this.eraseUserData(userId, reason);
         scheduled.status = 'executed';
         scheduled.canBeCancelled = false;
         this.scheduledErasures.set(userId, scheduled);
+        this.scheduledTimers.delete(userId); // ★ Timer temizle
       }, delay);
+
+      this.scheduledTimers.set(userId, timer); // ★ Timer'ı sakla
     }
 
     return scheduled;
   }
 
-  // ============================================
-  // 7. cancelScheduledErasure() (Anayasa dışı - şimdilik bırakıldı)
-  // ============================================
-
   /**
    * Planlanmış silme işlemini iptal eder
-   * Not: Anayasada tanımlı değil, ileride eklenebilir
-   * 
-   * @param userId - İptal edilecek kullanıcı
-   * @returns boolean - true: iptal edildi, false: iptal edilemedi
    */
   cancelScheduledErasure(userId: string): boolean {
     const scheduled = this.scheduledErasures.get(userId);
     if (scheduled && scheduled.canBeCancelled) {
+      // ★ Timer'ı iptal et
+      const timer = this.scheduledTimers.get(userId);
+      if (timer) {
+        clearTimeout(timer);
+        this.scheduledTimers.delete(userId);
+      }
+
       scheduled.status = 'cancelled';
       scheduled.canBeCancelled = false;
       this.scheduledErasures.set(userId, scheduled);

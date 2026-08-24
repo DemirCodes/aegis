@@ -356,42 +356,46 @@ export class SoftDeleteService {
    * });
    */
   async getSoftDeletedRecords(
-    options: SoftDeleteListOptions = {},
-  ): Promise<SoftDeletedRecord[]> {
-    const {
-      entityType,
-      limit = this.DEFAULT_LIST_LIMIT,
-      offset = 0,
-      includeHardDeleted = false,
-    } = options;
+  options: SoftDeleteListOptions = {},
+): Promise<SoftDeletedRecord[]> {
+  const {
+    entityType,
+    limit = this.DEFAULT_LIST_LIMIT,
+    offset = 0,
+    includeHardDeleted = false,
+  } = options;
 
-    const safeLimit = Math.min(this.MAX_LIST_LIMIT, Math.max(1, limit));
-    const safeOffset = Math.max(0, offset);
+  const safeLimit = Math.min(this.MAX_LIST_LIMIT, Math.max(1, limit));
+  const safeOffset = Math.max(0, offset);
 
-    const where: Record<string, any> = {};
-    if (entityType) where.entityType = entityType;
-    if (!includeHardDeleted) where.isHardDeleted = false;
-
-    const records = await this.prisma.softDeleteRegistry.findMany({
-      where,
-      take: safeLimit,
-      skip: safeOffset,
-      orderBy: { createdAt: 'desc' },
-    });
-
-    return records.map((record) => ({
-      id: record.id,
-      entityType: record.entityType,
-      entityId: record.entityId,
-      originalData: this.safeJSONParse(record.originalData),
-      deletedBy: record.deletedBy,
-      deletionReason: record.deletionReason,
-      isHardDeleted: record.isHardDeleted,
-      hardDeletedAt: record.hardDeletedAt,
-      createdAt: record.createdAt,
-    }));
+  const where: Record<string, any> = {};
+  if (entityType) where.entityType = entityType;
+  
+  // ✅ DÜZELTME: includeHardDeleted false ise sadece soft deleted'ları getir
+  if (!includeHardDeleted) {
+    where.isHardDeleted = false;
   }
+  // includeHardDeleted true ise where.isHardDeleted EKLEME → tüm kayıtlar gelir
 
+  const records = await this.prisma.softDeleteRegistry.findMany({
+    where,
+    take: safeLimit,
+    skip: safeOffset,
+    orderBy: { createdAt: 'desc' },
+  });
+
+  return records.map((record) => ({
+    id: record.id,
+    entityType: record.entityType,
+    entityId: record.entityId,
+    originalData: this.safeJSONParse(record.originalData),
+    deletedBy: record.deletedBy,
+    deletionReason: record.deletionReason,
+    isHardDeleted: record.isHardDeleted,
+    hardDeletedAt: record.hardDeletedAt,
+    createdAt: record.createdAt,
+  }));
+}
   // ============================================
   // 5. isSoftDeleted()
   // ============================================
