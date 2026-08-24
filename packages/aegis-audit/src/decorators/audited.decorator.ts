@@ -1,16 +1,20 @@
 // ============================================
 // @aegis/audit - @Audited Decorator
+// AuditTrailService'e bağlı güçlendirilmiş hali
 // ============================================
 
 import { PrismaClient } from '@prisma/client';
 import { AuditTrailService } from '../services/audit-trail.service';
 import { diffChanges, getClientIp, getUserAgent } from '../utils/audit-helpers';
+import { logger, AppError } from '@aegis/core';
 import type { AuditedOptions } from '../types/audit.types';
 
 let auditService: AuditTrailService | null = null;
 
 /**
  * Audit servisini initialize et
+ * @param prisma - PrismaClient instance'ı
+ * @param sensitiveFields - Ek hassas alanlar (opsiyonel)
  */
 export function initializeAudit(prisma: PrismaClient, sensitiveFields?: string[]) {
   auditService = new AuditTrailService(prisma, sensitiveFields);
@@ -25,7 +29,18 @@ export function initializeAudit(prisma: PrismaClient, sensitiveFields?: string[]
  * @param options.trackDeletes - Delete işlemleri track edilsin mi?
  * @param options.sensitive - Hassas veri işleme modu
  * @param options.customFields - Ekstra metadata
+ * 
+ * @example
+ * class UserService {
+ *   @Audited({ exclude: ['password'] })
+ *   async updateUser(id: string, data: UpdateUserDto) {
+ *     // Password field'ı log'lanmayacak
+ *   }
+ * }
  */
+
+
+
 export function Audited(options: AuditedOptions = {}) {
   return function (target: any, propertyKey: string, descriptor: PropertyDescriptor) {
     const originalMethod = descriptor.value;
@@ -39,8 +54,11 @@ export function Audited(options: AuditedOptions = {}) {
         customFields 
       } = options;
 
-      // Audit servisi yoksa orijinal metodu çağır
+      // Audit servisi yoksa orijinal metodu çağır (failover)
       if (!auditService) {
+        logger.warn('Audit service not initialized, skipping audit log', {
+          method: propertyKey,
+        });
         return originalMethod.apply(this, args);
       }
 
@@ -56,7 +74,9 @@ export function Audited(options: AuditedOptions = {}) {
         
         // İlk argüman genelde entity ID'sidir
         const firstArg = args[0];
-        const entityId = typeof firstArg === 'string' ? firstArg : (result?.id || result?.orderNumber || 'unknown');
+        const entityId = typeof firstArg === 'string' 
+          ? firstArg 
+          : (result?.id || result?.orderNumber || 'unknown');
 
         // Request context'ini bul (Express req genelde son parametredir)
         const req = args[args.length - 1];
@@ -123,14 +143,14 @@ export function Audited(options: AuditedOptions = {}) {
         if (auditService) {
           await auditService.createAuditLog(
             'system',
-            target.constructor.name,
+            target.constructor.name.replace('Service', ''),
             'UPDATE',
             { error: (error as Error).message },
             { 
               correlationId: `error_${Date.now()}`,
               customFields: { method: propertyKey },
             },
-          );
+          ).catch(() => {}); // Audit hatası orijinal hatayı gölgelemesin
         }
         throw error;
       }

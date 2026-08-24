@@ -1,19 +1,23 @@
 // ============================================
 // @aegis/audit - Audit Middleware
+// Güçlendirilmiş hali: logger kullanımı
 // ============================================
 
 import { Request, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { AuditTrailService } from '../services/audit-trail.service';
 import { getClientIp, getUserAgent } from '../utils/audit-helpers';
+import { logger } from '@aegis/core';
 
 let auditService: AuditTrailService | null = null;
 
 /**
  * Audit middleware'i initialize et
+ * @param prisma - PrismaClient instance'ı
+ * @param sensitiveFields - Ek hassas alanlar (opsiyonel)
  */
-export function initializeAuditMiddleware(prisma: PrismaClient) {
-  auditService = new AuditTrailService(prisma);
+export function initializeAuditMiddleware(prisma: PrismaClient, sensitiveFields?: string[]) {
+  auditService = new AuditTrailService(prisma, sensitiveFields);
 }
 
 /**
@@ -80,7 +84,7 @@ export function auditMiddleware(req: Request, res: Response, next: NextFunction)
       );
     } catch (error) {
       // Audit log hatası uygulamayı etkilemesin
-      console.error('Audit middleware error:', error);
+      logger.error('Audit middleware error', error as Error);
     }
   });
 

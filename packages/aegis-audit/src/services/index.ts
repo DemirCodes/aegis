@@ -5,3 +5,4 @@
 export { AuditTrailService } from './audit-trail.service';
 export { GDPRDeletionService } from './gdpr-deletion.service';
 export { AuditReportService } from './audit-report.service';
+export { SoftDeleteService } from './soft-delete.service';
