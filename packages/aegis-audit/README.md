@@ -1,16 +1,10 @@
-# @aegis/audit
+# 🗂️ @aegis/audit
 
-AEGIS framework'ünün **Audit Trail & GDPR Compliance** modülü.
+**AEGIS Framework - Audit Trail & GDPR Compliance**
 
----
+> Her veri değişikliğini otomatik kaydeder, GDPR uyumluluğu sağlar, soft-delete yönetir.
 
-## 🎯 Amaç
-
-Production-ready microservices için:
-
-- **Audit Trail** → Tüm veri değişikliklerini otomatik kaydetme
-- **GDPR Compliance** → Veri silme, anonimleştirme, dışa aktarma
-- **Soft Delete** → Kalıcı silme yerine geçici silme + geri getirme
+**Bağımlılıklar:** `@aegis/core`, `@aegis/resilience`, `@aegis/queue`
 
 ---
 
@@ -23,8 +17,6 @@ pnpm add @aegis/audit
 ---
 
 ## 🚀 Hızlı Başlangıç
-
-### Initialize
 
 ```typescript
 import { PrismaClient } from '@prisma/client';
@@ -45,96 +37,57 @@ initializeGDPREngine(prisma);
 initializeSoftDeleteMiddleware(prisma);
 ```
 
-### Express Middleware Kullanımı
-
-```typescript
-import express from 'express';
-import {
-  auditMiddleware,
-  excludeFromAudit,
-  softDeleteFilter,
-  onlyDeletedFilter,
-  gdprErasureHandler,
-  gdprExportHandler,
-} from '@aegis/audit';
-
-const app = express();
-
-// Tüm HTTP isteklerini otomatik log'la
-app.use(auditMiddleware);
-
-// Belirli endpoint'leri audit'ten hariç tut
-app.use(excludeFromAudit(['/health', '/metrics']));
-
-// Silinmiş kayıtları gizle (normal kullanıcılar için)
-app.use(softDeleteFilter);
-
-// Sadece silinmiş kayıtları göster (admin paneli için)
-app.use('/admin', onlyDeletedFilter);
-
-// GDPR endpoint'leri
-app.delete('/api/gdpr/:userId', gdprErasureHandler);
-app.get('/api/gdpr/:userId/export', gdprExportHandler);
-```
-
 ---
 
-## 📌 Decorator
+## 📌 Decorators
 
-### `@Audited()`
+### `@Audited(options?)`
 
-**Açıklama:** Bir metodun tüm çağrılarını otomatik olarak audit trail'a kaydeder. Veri değişikliklerini (CREATE, UPDATE, DELETE) takip eder. Who, What, When, Why bilgilerini loglar.
+**Açıklama:** Metod çağrısını otomatik audit'e yazar.
 
-**Parametreler:**
+| Parametre | Tip | Default | Açıklama |
+|-----------|-----|---------|----------|
+| `include` | `string[]` | - | Whitelist - sadece bu alanlar loglanır |
+| `exclude` | `string[]` | - | Blacklist - bu alanlar loglanmaz |
+| `trackDeletes` | `boolean` | `true` | DELETE işlemlerini kaydet |
+| `sensitive` | `boolean` | `false` | Hassas veri modu |
+| `customFields` | `Record<string, any>` | - | Ekstra metadata |
 
-```typescript
-options?: {
-  include?: string[]           // Hangi field'ları log'la (whitelist)
-  exclude?: string[]           // Hangi field'ları log'lama (blacklist)
-  trackDeletes?: boolean       // Delete işlemlerini track et (default: true)
-  sensitive?: boolean          // Sensitive data handling (default: false)
-  customFields?: Record<string, any> // Ekstra metadata ekle
-}
-```
-
-**Dönüş:** `void` (Decorator, return type yok)
+**Kullandığı Core Fonksiyonları:** `core.diffChanges()`, `core.maskSensitiveData()`
 
 **Kullanım:**
-
 ```typescript
+import { Audited } from '@aegis/audit';
+
 class UserService {
   @Audited({ exclude: ['password'] })
   async updateUser(id: string, data: UpdateUserDto) {
-    // Password log'lanmaz
+    // password loglanmaz, diğer her şey otomatik audit'e yazılır
+  }
+
+  @Audited({ trackDeletes: false })
+  async softDeleteUser(id: string) {
+    // DELETE işlemi loglanmaz
   }
 }
-```
-
-**Initialize:**
-
-```typescript
-initializeAudit(prisma, ['customSensitiveField']);
 ```
 
 ### `@SoftDelete()`
 
-**Açıklama:** Entity'yi kalıcı silmek yerine `deletedAt` işaretler. `SoftDeleteRegistry`'ye kaydeder ve audit log yazar.
+**Açıklama:** Kalıcı silme yerine `deletedAt` işaretler.
+
+**Kullandığı:** `SoftDeleteService.softDelete()`
 
 **Kullanım:**
-
 ```typescript
+import { SoftDelete } from '@aegis/audit';
+
 class UserService {
   @SoftDelete()
   async deleteUser(id: string, context?: { userId?: string; reason?: string }) {
-    // Soft delete yapılır
+    // Kalıcı silmez, deletedAt set eder + audit log yazar
   }
 }
-```
-
-**Initialize:**
-
-```typescript
-initializeSoftDelete(prisma, auditService);
 ```
 
 ---
@@ -142,362 +95,727 @@ initializeSoftDelete(prisma, auditService);
 ## 📌 Middleware
 
 ### `auditMiddleware`
-**Açıklama:** Tüm API isteklerini audit trail'e kaydeder. Hassas endpoint'leri (login, register) log'lamaz.
 
-### `excludeFromAudit`
+**Açıklama:** Tüm HTTP isteklerini otomatik loglar. GET isteklerini sadece hata durumunda loglar.
+
+**Kullanım:**
+```typescript
+import express from 'express';
+import { auditMiddleware } from '@aegis/audit';
+
+const app = express();
+app.use(auditMiddleware);
+```
+
+### `excludeFromAudit(paths)`
+
 **Açıklama:** Belirli endpoint'leri audit'ten hariç tutar.
 
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `paths` | `string[]` | Hariç tutulacak endpoint'ler |
+
+**Kullanım:**
+```typescript
+app.use(excludeFromAudit(['/health', '/metrics', '/auth/login']));
+```
+
 ### `softDeleteFilter`
-**Açıklama:** Soft-delete edilmiş kayıtları response'tan filtreler. Normal kullanıcılar silinmiş verileri görmez.
+
+**Açıklama:** Silinmiş kayıtları response'tan gizler.
+
+**Kullanım:**
+```typescript
+app.use(softDeleteFilter);
+// Kullanıcılar silinmiş kayıtları GÖREMEZ
+```
 
 ### `onlyDeletedFilter`
-**Açıklama:** Sadece soft-delete edilmiş kayıtları gösterir. Admin paneli için.
+
+**Açıklama:** Sadece silinmiş kayıtları gösterir (admin paneli).
+
+**Kullanım:**
+```typescript
+app.use('/admin', onlyDeletedFilter);
+// Admin sadece silinmiş kayıtları görür
+```
 
 ### `gdprErasureHandler`
-**Açıklama:** GDPR veri silme talebini işleyen Express handler.
+
+**Açıklama:** GDPR silme isteğini işleyen route handler.
+
+**Kullanım:**
+```typescript
+app.delete('/api/gdpr/:userId', gdprErasureHandler);
+```
 
 ### `gdprExportHandler`
-**Açıklama:** GDPR veri dışa aktarma talebini işleyen Express handler.
+
+**Açıklama:** GDPR veri dışa aktarma handler'ı.
+
+**Kullanım:**
+```typescript
+app.get('/api/gdpr/:userId/export', gdprExportHandler);
+```
 
 ---
 
-## 📌 Services
+## 📌 AuditTrailService
 
-### AuditTrailService
+**Açıklama:** Audit log CRUD işlemleri.
 
-#### ✅ `createAuditLog()`
-**Açıklama:** Yeni bir audit log entry'si oluşturur ve veritabanına kaydeder.
+**Constructor:**
+```typescript
+new AuditTrailService(prisma: PrismaClient, sensitiveFields?: string[])
+```
 
-**Parametre:**
-- `userId: string` → Hangi kullanıcı yaptı?
-- `entityType: string` → Hangi entity'ye yapıldı?
-- `action: 'CREATE' | 'UPDATE' | 'DELETE'` → Hangi işlem?
-- `changes: Record<string, any>` → Ne değişti?
-- `metadata?: AuditMetadata` → IP, User Agent, correlationId
+---
+
+### `createAuditLog(userId, entityType, action, changes, metadata?)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `userId` | `string` | İşlemi yapan kullanıcı |
+| `entityType` | `string` | Entity tipi (User, Product, Order) |
+| `action` | `'CREATE' \| 'UPDATE' \| 'DELETE'` | İşlem tipi |
+| `changes` | `Record<string, any>` | Değişiklikler |
+| `metadata.ipAddress` | `string` | IP adresi |
+| `metadata.userAgent` | `string` | Tarayıcı bilgisi |
+| `metadata.correlationId` | `string` | Trace ID |
+| `metadata.customFields` | `Record<string, any>` | Ek metadata |
 
 **Dönüş:** `Promise<AuditLog>`
 
-**Örnek:**
+**Kullandığı Core:** `core.generateAuditId()`, `core.maskSensitiveData()`, `core.diffChanges()`
 
+**Kullanım:**
 ```typescript
-await auditTrailService.createAuditLog(
+await auditService.createAuditLog(
   'user-123',
   'User',
   'UPDATE',
-  { email: { old: 'old@email.com', new: 'new@email.com' } },
-  { ipAddress: '192.168.1.1' }
-)
+  { email: { old: 'a@a.com', new: 'b@b.com' } },
+  { ipAddress: '192.168.1.1', correlationId: 'trace-abc' }
+);
 ```
 
-#### ✅ `getAuditLogs()`
-**Açıklama:** Audit log'ları filtreler, sıralar, sayfalar.
+---
 
-**Parametre:**
-- `filters: AuditFilters`
-- `pagination?: PaginationOptions`
+### `getAuditLogs(filters?, pagination?)`
+
+| Parametre | Tip | Default | Açıklama |
+|-----------|-----|---------|----------|
+| `filters.userId` | `string` | - | Kullanıcı filtresi |
+| `filters.entityType` | `string` | - | Entity filtresi |
+| `filters.action` | `string` | - | Aksiyon filtresi |
+| `filters.startDate` | `Date` | - | Başlangıç tarihi |
+| `filters.endDate` | `Date` | - | Bitiş tarihi |
+| `filters.entityId` | `string` | - | Entity ID filtresi |
+| `pagination.page` | `number` | `1` | Sayfa |
+| `pagination.pageSize` | `number` | `20` | Sayfa başına kayıt |
 
 **Dönüş:** `Promise<PaginatedAuditLogs>`
 
-#### ✅ `getAuditLogById()`
-**Açıklama:** ID ile spesifik audit log getirir.
+**Kullandığı Core:** `core.normalizePagination()`
 
-**Parametre:** `auditLogId: string`
+**Kullanım:**
+```typescript
+const logs = await auditService.getAuditLogs(
+  { userId: 'user-123', startDate: new Date('2024-01-01') },
+  { page: 1, pageSize: 50 }
+);
+```
+
+---
+
+### `getAuditLogById(auditLogId)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `auditLogId` | `string` | Log ID |
 
 **Dönüş:** `Promise<AuditLog | null>`
 
-#### ✅ `exportAuditTrail()`
-**Açıklama:** Audit trail'ı PDF, CSV veya JSON formatında export eder.
+**Kullanım:**
+```typescript
+const log = await auditService.getAuditLogById('audit_9f3a2b1c4d5e6f7a');
+```
 
-**Parametre:** `filters: AuditFilters`, `format: 'pdf' | 'csv' | 'json'`
+---
 
-**Dönüş:** `Promise<Buffer>`
+### `searchAuditLogs(query, filters?)`
 
-#### ✅ `getUserActivityHistory()`
-**Açıklama:** Kullanıcının aktivitelerini kronolojik sırada getirir.
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `query` | `string` | Arama terimi |
+| `filters` | `AuditFilters` | Ek filtreler |
 
-**Parametre:** `userId: string`, `options?: ActivityHistoryOptions`
+**Dönüş:** `Promise<AuditLog[]>`
+
+**Kullanım:**
+```typescript
+const results = await auditService.searchAuditLogs('user@email.com');
+```
+
+---
+
+### `getUserActivityHistory(userId, options?)`
+
+| Parametre | Tip | Default | Açıklama |
+|-----------|-----|---------|----------|
+| `userId` | `string` | - | Kullanıcı ID |
+| `options.limit` | `number` | `100` | Max kayıt |
+| `options.includeFailures` | `boolean` | `true` | Başarısızları dahil et |
+| `options.entityFilters` | `string[]` | - | Entity filtresi |
 
 **Dönüş:** `Promise<UserActivityLog[]>`
 
-#### ✅ `getEntityHistory()`
-**Açıklama:** Entity'nin tüm değişiklik geçmişini getirir.
+**Kullanım:**
+```typescript
+const history = await auditService.getUserActivityHistory('user-123', { limit: 10 });
+```
 
-**Parametre:** `entityType: string`, `entityId: string`
+---
+
+### `getEntityHistory(entityType, entityId)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `entityType` | `string` | Entity tipi |
+| `entityId` | `string` | Entity ID |
 
 **Dönüş:** `Promise<AuditLog[]>`
 
-#### ✅ `searchAuditLogs()`
-**Açıklama:** Audit log'larda arama yapar.
+**Kullanım:**
+```typescript
+const productHistory = await auditService.getEntityHistory('Product', 'prod-123');
+```
 
-**Parametre:** `query: string`, `filters?: AuditFilters`
+---
+
+### `getAuditLogByCorrelationId(correlationId)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `correlationId` | `string` | Trace ID |
 
 **Dönüş:** `Promise<AuditLog[]>`
 
-#### ✅ `retryFailedAuditLog()`
-**Açıklama:** Başarısız log'u tekrar yazmayı dener.
+**Kullanım:**
+```typescript
+const relatedLogs = await auditService.getAuditLogByCorrelationId('trace-abc');
+```
 
-**Parametre:** `auditLogId: string`
+---
+
+### `bulkCreateAuditLogs(logs)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `logs` | `BulkCreateAuditLogInput[]` | Toplu loglar (max: 1000) |
+
+**Dönüş:** `Promise<number>` - Yazılan kayıt sayısı
+
+**Kullanım:**
+```typescript
+const count = await auditService.bulkCreateAuditLogs([
+  { userId: 'u1', entityType: 'User', action: 'CREATE', changes: {...} },
+  { userId: 'u2', entityType: 'Order', action: 'UPDATE', changes: {...} },
+]);
+```
+
+---
+
+### `retryFailedAuditLog(auditLogId)`
+
+**Açıklama:** Başarısız log yazımını tekrar dener.
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `auditLogId` | `string` | Log ID |
 
 **Dönüş:** `Promise<boolean>`
 
-#### ✅ `purgeOldAuditLogs()`
-**Açıklama:** Belirli tarihten eski log'ları siler.
+**Kullandığı:** `resilience.executeWithRetry()`
 
-**Parametre:** `olderThan: Date`
+**Kullanım:**
+```typescript
+const success = await auditService.retryFailedAuditLog('audit_9f3a...');
+```
 
-**Dönüş:** `Promise<number>`
+---
 
-#### ✅ `getAuditLogByCorrelationId()`
-**Açıklama:** Aynı correlationId'ye sahip log'ları getirir.
+### `purgeOldAuditLogs(olderThan)`
 
-**Parametre:** `correlationId: string`
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `olderThan` | `Date` | Bu tarihten eski loglar silinir |
 
-**Dönüş:** `Promise<AuditLog[]>`
+**Dönüş:** `Promise<number>` - Silinen kayıt sayısı
 
-#### ✅ `bulkCreateAuditLogs()`
-**Açıklama:** Birden fazla log'u tek seferde yazar.
+**Kullanım:**
+```typescript
+const deleted = await auditService.purgeOldAuditLogs(new Date('2023-01-01'));
+```
 
-**Parametre:** `logs: BulkCreateAuditLogInput[]` (max: 1000)
+---
 
-**Dönüş:** `Promise<number>`
+### `exportAuditTrail(filters, format)`
 
-### GDPRDeletionService
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `filters` | `AuditFilters` | Filtreler |
+| `format` | `'json' \| 'csv' \| 'pdf'` | Çıktı formatı |
 
-#### ✅ `eraseUserData()`
-**Açıklama:** Kullanıcı verilerini GDPR uyumlu siler.
+**Dönüş:** `Promise<Buffer>`
 
-**Parametre:** `userId: string`, `reason: string`
+**Kullandığı Core:** `core.exportData()`
+
+**Kullanım:**
+```typescript
+const pdf = await auditService.exportAuditTrail(
+  { userId: 'user-123' },
+  'pdf'
+);
+```
+
+---
+
+## 📌 GDPRDeletionService
+
+**Açıklama:** GDPR uyumluluğu için veri silme/anonimleştirme/export.
+
+**Constructor:**
+```typescript
+new GDPRDeletionService(prisma: PrismaClient, auditService: AuditTrailService)
+```
+
+---
+
+### `eraseUserData(userId, reason)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `userId` | `string` | Silinecek kullanıcı |
+| `reason` | `string` | Silme nedeni |
 
 **Dönüş:** `Promise<GDPRErasureResult>`
 
-#### ✅ `exportUserData()`
-**Açıklama:** Kullanıcı verilerini dışa aktarır (right-to-data).
+**Özellik:** Transaction destekli (ya hep ya hiç)
 
-**Parametre:** `userId: string`, `format?: 'json' | 'csv'`
+**Kullanım:**
+```typescript
+const result = await gdprService.eraseUserData('user-123', 'user_requested');
+// { status: 'completed', tablesAffected: ['User', 'UserSession', ...], recordsDeleted: 1250 }
+```
+
+---
+
+### `exportUserData(userId, format?)`
+
+| Parametre | Tip | Default | Açıklama |
+|-----------|-----|---------|----------|
+| `userId` | `string` | - | Kullanıcı ID |
+| `format` | `'json' \| 'csv'` | `'json'` | Çıktı formatı |
 
 **Dönüş:** `Promise<UserDataExport>`
 
-#### ✅ `anonymizeUserData()`
-**Açıklama:** Kullanıcı verilerini anonimleştirir.
+**Kullanım:**
+```typescript
+const data = await gdprService.exportUserData('user-123', 'json');
+```
 
-**Parametre:** `userId: string`, `fields: string[]`
+---
+
+### `anonymizeUserData(userId, fields)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `userId` | `string` | Kullanıcı ID |
+| `fields` | `string[]` | Anonimleştirilecek alanlar |
 
 **Dönüş:** `Promise<AnonymizationResult>`
 
-#### ✅ `getCascadeDeletePlan()`
-**Açıklama:** Silme öncesi cascade planını gösterir.
+**Kullandığı Core:** `core.maskSensitiveData()`
 
-**Parametre:** `userId: string`
+**Kullanım:**
+```typescript
+const result = await gdprService.anonymizeUserData('user-123', ['email', 'phone', 'firstName']);
+```
 
-**Dönüş:** `Promise<CascadeDeletePlan>`
+---
 
-#### ✅ `verifyErasureCompletion()`
-**Açıklama:** Silme işleminin tamamlandığını doğrular.
+### `getCascadeDeletePlan(userId)`
 
-**Parametre:** `userId: string`
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `userId` | `string` | Kullanıcı ID |
+
+**Dönüş:** `Promise<CascadeDeletePlan>` - Silme öncesi etki analizi
+
+**Kullanım:**
+```typescript
+const plan = await gdprService.getCascadeDeletePlan('user-123');
+// { totalRecordsToDelete: 2500, tables: [...] }
+```
+
+---
+
+### `verifyErasureCompletion(userId)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `userId` | `string` | Kullanıcı ID |
 
 **Dönüş:** `Promise<ErasureVerification>`
 
-#### ✅ `scheduleDataErasure()`
-**Açıklama:** Veri silmeyi ileri tarihe planlar.
+**Kullanım:**
+```typescript
+const verify = await gdprService.verifyErasureCompletion('user-123');
+// { isComplete: true, status: 'clean' }
+```
 
-**Parametre:** `userId: string`, `scheduledAt: Date`, `reason: string`
+---
+
+### `scheduleDataErasure(userId, scheduledAt, reason)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `userId` | `string` | Kullanıcı ID |
+| `scheduledAt` | `Date` | Ne zaman silinecek |
+| `reason` | `string` | Silme nedeni |
 
 **Dönüş:** `Promise<ScheduledErasure>`
 
-#### ✅ `cancelScheduledErasure()`
-**Açıklama:** Planlı silmeyi iptal eder.
+**Kullandığı:** `queue.addJob()` (async)
 
-**Parametre:** `userId: string`
+**Kullanım:**
+```typescript
+const scheduled = await gdprService.scheduleDataErasure(
+  'user-123',
+  new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 gün sonra
+  'user_requested_with_30day_delay'
+);
+```
 
-**Dönüş:** `boolean`
+---
 
-### AuditReportService
+### `cancelScheduledErasure(userId)`
 
-#### ✅ `generateSummaryReport()`
-**Açıklama:** Belirli dönem için özet rapor oluşturur. Tüm aksiyon, entity, kullanıcı ve günlük dağılımları içerir.
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `userId` | `string` | Kullanıcı ID |
 
-**Parametre:** `startDate: Date`, `endDate: Date`
+**Dönüş:** `boolean` - İptal edildi mi?
 
-**Dönüş:** `Promise<SummaryReport>`
+**Kullanım:**
+```typescript
+const cancelled = await gdprService.cancelScheduledErasure('user-123');
+```
 
-#### ✅ `getMostActiveUsers()`
-**Açıklama:** En aktif kullanıcıları getirir (aksiyon sayısına göre).
+---
 
-**Parametre:** `limit?: number` (default: 10, max: 100)
+## 📌 SoftDeleteService
 
-**Dönüş:** `Promise<ActiveUser[]>`
+**Açıklama:** Soft delete yönetimi.
 
-#### ✅ `getMostChangedEntities()`
-**Açıklama:** En çok değişiklik yapılan entity tiplerini getirir.
+---
 
-**Parametre:** `limit?: number`
+### `softDelete(entityType, entityId, deletedBy?, reason?)`
 
-**Dönüş:** `Promise<ChangedEntity[]>`
-
-#### ✅ `getFailedAuditLogs()`
-**Açıklama:** Başarısız audit log kayıtlarını getirir.
-
-**Parametre:** `limit?: number`
-
-**Dönüş:** `Promise<FailedAuditLogEntry[]>`
-
-#### ✅ `getHourlyActivity()`
-**Açıklama:** Belirli bir günün saatlik aktivite dağılımını getirir.
-
-**Parametre:** `date?: Date` (default: bugün)
-
-**Dönüş:** `Promise<HourlyActivity>`
-
-#### ✅ `getDailyActivity()`
-**Açıklama:** Belirli dönem için günlük aktivite trendini getirir (CREATE, UPDATE, DELETE dağılımı).
-
-**Parametre:** `startDate: Date`, `endDate: Date`
-
-**Dönüş:** `Promise<DailyActivity[]>`
-
-#### ✅ `getTopErrorMessages()`
-**Açıklama:** En sık görülen hata mesajlarını getirir.
-
-**Parametre:** `limit?: number`
-
-**Dönüş:** `Promise<ErrorFrequency[]>`
-
-#### ✅ `getUserActivityTimeline()`
-**Açıklama:** Kullanıcının zaman içindeki aktivite paternini getirir.
-
-**Parametre:** `userId: string`, `period: 'day' | 'week' | 'month'`
-
-**Dönüş:** `Promise<ActivityTimeline>`
-
-#### ✅ `getEntityChangeTrend()`
-**Açıklama:** Entity'nin değişim sıklığı trendini getirir.
-
-**Parametre:** `entityType: string`, `entityId: string`
-
-**Dönüş:** `Promise<ChangeTrend>`
-
-#### ✅ `exportReport()`
-**Açıklama:** Belirli dönem raporunu JSON olarak dışa aktarır.
-
-**Parametre:** `startDate: Date`, `endDate: Date`
-
-**Dönüş:** `Promise<string>`
-
-### SoftDeleteService
-
-#### ✅ `softDelete()`
-**Açıklama:** Entity'yi kalıcı silme yerine soft delete yapar. `SoftDeleteRegistry`'ye kaydeder ve audit log yazar.
-
-**Parametre:**
-- `entityType: string`
-- `entityId: string`
-- `deletedBy?: string`
-- `reason?: string`
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `entityType` | `string` | Entity tipi |
+| `entityId` | `string` | Entity ID |
+| `deletedBy` | `string` | Silen kullanıcı |
+| `reason` | `string` | Silme nedeni |
 
 **Dönüş:** `Promise<SoftDeleteResult>`
 
-#### ✅ `restore()`
-**Açıklama:** Soft delete edilmiş entity'yi geri getirir.
+**Kullanım:**
+```typescript
+await softDeleteService.softDelete('User', 'user-123', 'admin', 'inactive_account');
+```
 
-**Parametre:** `entityType: string`, `entityId: string`
+---
+
+### `restore(entityType, entityId)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `entityType` | `string` | Entity tipi |
+| `entityId` | `string` | Entity ID |
 
 **Dönüş:** `Promise<RestoreResult>`
 
-#### ✅ `hardDelete()`
-**Açıklama:** Soft delete edilmiş entity'yi kalıcı olarak siler.
+**Kullanım:**
+```typescript
+await softDeleteService.restore('User', 'user-123');
+```
 
-**Parametre:** `entityType: string`, `entityId: string`
+---
+
+### `hardDelete(entityType, entityId)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `entityType` | `string` | Entity tipi |
+| `entityId` | `string` | Entity ID |
 
 **Dönüş:** `Promise<HardDeleteResult>`
 
-#### ✅ `getSoftDeletedRecords()`
-**Açıklama:** Silinen kayıtları listeler.
+**Kullanım:**
+```typescript
+await softDeleteService.hardDelete('User', 'user-123');
+```
 
-**Parametre:** `options?: SoftDeleteListOptions`
+---
+
+### `getSoftDeletedRecords(options?)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `options.entityType` | `string` | Entity filtresi |
+| `options.limit` | `number` | Max kayıt |
 
 **Dönüş:** `Promise<SoftDeletedRecord[]>`
 
-#### ✅ `isSoftDeleted()`
-**Açıklama:** Entity'nin soft delete edilip edilmediğini kontrol eder.
-
-**Parametre:** `entityType: string`, `entityId: string`
-
-**Dönüş:** `Promise<SoftDeleteCheckResult>`
+**Kullanım:**
+```typescript
+const deleted = await softDeleteService.getSoftDeletedRecords({ entityType: 'User' });
+```
 
 ---
 
-## 🛠️ Utility Fonksiyonları
+### `isSoftDeleted(entityType, entityId)`
 
-### `diffChanges(oldData, newData, excludeFields?)`
-**Açıklama:** İki obje arasındaki değişiklikleri `{ old, new }` formatında çıkarır.
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `entityType` | `string` | Entity tipi |
+| `entityId` | `string` | Entity ID |
 
-**Örnek:**
+**Dönüş:** `Promise<boolean>`
 
+**Kullanım:**
 ```typescript
-const changes = diffChanges(
-  { name: 'Ali', age: 25 },
-  { name: 'Ali', age: 26 }
+const isDeleted = await softDeleteService.isSoftDeleted('User', 'user-123');
+```
+
+---
+
+## 📌 AuditReportService
+
+**Açıklama:** Audit analitik ve raporlama.
+
+---
+
+### `generateSummaryReport(startDate, endDate)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `startDate` | `Date` | Başlangıç |
+| `endDate` | `Date` | Bitiş |
+
+**Dönüş:** `Promise<SummaryReport>`
+
+**Kullanım:**
+```typescript
+const report = await auditReportService.generateSummaryReport(
+  new Date('2024-01-01'),
+  new Date('2024-01-31')
 );
-// { age: { old: 25, new: 26 } }
 ```
 
-### `maskSensitiveData(data, sensitiveFields?)`
-**Açıklama:** Hassas verileri maskeler. İç içe objelerde de recursive çalışır.
+---
 
-**Örnek:**
+### `getMostActiveUsers(limit?)`
+
+| Parametre | Tip | Default | Açıklama |
+|-----------|-----|---------|----------|
+| `limit` | `number` | `10` | Max kayıt |
+
+**Dönüş:** `Promise<ActiveUser[]>`
+
+**Kullanım:**
+```typescript
+const topUsers = await auditReportService.getMostActiveUsers(5);
+// [{ userId: 'user-1', totalActions: 152 }, ...]
+```
+
+---
+
+### `getMostChangedEntities(limit?)`
+
+| Parametre | Tip | Default | Açıklama |
+|-----------|-----|---------|----------|
+| `limit` | `number` | `10` | Max kayıt |
+
+**Dönüş:** `Promise<ChangedEntity[]>`
+
+**Kullanım:**
 
 ```typescript
-const masked = maskSensitiveData({ password: 'secret', name: 'Ali' });
-// { password: '[REDACTED]', name: 'Ali' }
+const topEntities = await auditReportService.getMostChangedEntities(5);
+// [{ entityType: 'Product', totalChanges: 450 }, { entityType: 'Order', totalChanges: 320 }]
 ```
 
-### `generateChangesSummary(changes, maxLength?)`
-**Açıklama:** Değişikliklerin okunabilir özetini oluşturur.
+---
 
-**Örnek:**
+### `getHourlyActivity(date?)`
+
+| Parametre | Tip | Default | Açıklama |
+|-----------|-----|---------|----------|
+| `date` | `Date` | Bugün | Analiz edilecek gün |
+
+**Dönüş:** `Promise<HourlyActivity>`
+**Kullanım:**
 
 ```typescript
-const summary = generateChangesSummary({ email: { old: 'a@a.com', new: 'b@b.com' } });
-// 'email: "a@a.com" → "b@b.com"'
+const hourly = await auditReportService.getHourlyActivity();
+// { date: '2024-01-15', hourlyActivity: { 0: 5, 1: 2, 9: 45, 14: 120, 23: 3 } }
 ```
+---
+
+### `getDailyActivity(startDate, endDate)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `startDate` | `Date` | Başlangıç |
+| `endDate` | `Date` | Bitiş |
+
+**Dönüş:** `Promise<DailyActivity[]>`
+**Kullanım:**
+
+```typescript
+const daily = await auditReportService.getDailyActivity(
+  new Date('2024-01-01'),
+  new Date('2024-01-31')
+);
+// [{ date: '2024-01-01', CREATE: 10, UPDATE: 25, DELETE: 3 }, ...]
+```
+---
+
+### `getUserActivityTimeline(userId, period)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `userId` | `string` | Kullanıcı ID |
+| `period` | `'day' \| 'week' \| 'month'` | Zaman aralığı |
+
+**Dönüş:** `Promise<ActivityTimeline>`
+**Kullanım:**
+
+```typescript
+const timeline = await auditReportService.getUserActivityTimeline('user-123', 'week');
+// { userId: 'user-123', period: 'week', dataPoints: [{ date: '2024-01-01', count: 15 }, ...] }
+```
+---
+
+### `getEntityChangeTrend(entityType, entityId)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `entityType` | `string` | Entity tipi |
+| `entityId` | `string` | Entity ID |
+
+**Dönüş:** `Promise<ChangeTrend>`
+**Kullanım:**
+
+```typescript
+const trend = await auditReportService.getEntityChangeTrend('Product', 'prod-123');
+// { entityType: 'Product', entityId: 'prod-123', changesPerDay: [3, 5, 2, 8] }
+```
+---
+
+### `exportReport(startDate, endDate)`
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `startDate` | `Date` | Başlangıç |
+| `endDate` | `Date` | Bitiş |
+
+**Dönüş:** `Promise<string>` - JSON string
+**Kullanım:**
+
+```typescript
+const jsonReport = await auditReportService.exportReport(
+  new Date('2024-01-01'),
+  new Date('2024-01-31')
+);
+// '{"totalActions":1520,"actionBreakdown":{"CREATE":300,"UPDATE":900,"DELETE":320}}'
+```
+---
+
+## 📌 Utility Fonksiyonları
+
+### `maskAuditSensitiveData(data)`
+
+**Açıklama:** `core.maskSensitiveData()`'yı audit'e özel alan listesiyle çağırır.
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `data` | `any` | Maskelenecek veri |
+
+**Dönüş:** Maskelenmiş veri
+
+**Kullanım:**
+
+```typescript
+const masked = maskAuditSensitiveData({ password: 'x', creditCard: '1234', name: 'Ali' });
+// { password: '[REDACTED]', creditCard: '[REDACTED]', name: 'Ali' }
+```
+
+**Kullandığı Core:** `core.maskSensitiveData()`
+
+---
 
 ### `getClientIp(req)`
-**Açıklama:** IP adresini alır. Proxy (X-Forwarded-For) ve Cloudflare destekli.
+
+**Açıklama:** İstemci IP'sini çıkarır. X-Forwarded-For + Cloudflare destekli.
+
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `req` | `Request` | Express request |
+
+**Dönüş:** `string`
+**Kullanım:**
+
+```typescript
+const ip = getClientIp(req);
+// '192.168.1.1' veya Cloudflare: '203.0.113.5'
+```
+---
 
 ### `getUserAgent(req)`
-**Açıklama:** Tarayıcı bilgisini alır.
 
-### `generateAuditId()`
-**Açıklama:** Benzersiz audit log ID'si üretir. Format: `audit_[16 hex karakter]`
+**Açıklama:** Tarayıcı bilgisini çıkarır.
 
----
+| Parametre | Tip | Açıklama |
+|-----------|-----|----------|
+| `req` | `Request` | Express request |
 
-## 📊 Test
+**Dönüş:** `string`
+**Kullanım:**
 
-```bash
-pnpm test
+```typescript
+const ua = getUserAgent(req);
+// 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
 ```
-
-| Metrik | Değer |
-|---|---|
-| Test Sayısı | 137 |
-| Statement Coverage | %92.27 |
-| Branch Coverage | %88.26 |
-| Function Coverage | %91.04 |
-| Line Coverage | %94.68 |
-| Test Suite | 4/4 PASS |
-
 ---
 
-## 🔒 Güvenlik
+## 🔗 Delegasyon Özeti
 
-- ✅ Hassas veri maskeleme (password, creditCard, ssn, token, apiKey, privateKey)
-- ✅ X-Forwarded-For + Cloudflare IP desteği
-- ✅ Input validasyonu (tüm servislerde)
-- ✅ AppError ile standart hata yönetimi
-- ✅ Transaction desteği (GDPR + SoftDelete)
-- ✅ Case-insensitive hassas alan tespiti
+| Kullandığı | Fonksiyon | Amaç |
+|-----------|-----------|------|
+| `core` | `generateAuditId()` | ID üretimi |
+| `core` | `maskSensitiveData()` | Hassas veri gizleme |
+| `core` | `diffChanges()` | Değişiklik tespiti |
+| `core` | `formatChangesSummary()` | Özet formatlama |
+| `core` | `exportData()` | PDF/CSV/JSON export |
+| `core` | `normalizePagination()` | Sayfalama |
+| `core` | `AppError` | Hata yönetimi |
+| `resilience` | `executeWithRetry()` | Retry (başarısız log tekrarı) |
+| `queue` | `addJob()` | Async GDPR silme |
 
 ---
 
