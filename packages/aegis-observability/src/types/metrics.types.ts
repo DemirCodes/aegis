@@ -1,82 +1,146 @@
-// Anomalinin ne kadar ciddi olduğunu belirten seviyeler
-export type AnomalySeverity = 'low' | 'medium' | 'high' | 'critical';
+// src/types/metrics.types.ts
+// Metrik, anomali, alert, health ve rapor tipleri.
+// NOT: Log tipleri (LogEntry, LogSearchResult, LogStats) log.types.ts'e taşındı.
 
-// İzlenen bir metriğin normal davranıştan sapıp sapmadığını gösterir
-export type AnomalyDetectionResult = {
-  isAnomaly: boolean;          // Normalden sapma var mı?
-  score: number;               // Sapma şiddeti (0-1 arası, 1'e yaklaştıkça daha anormal)
-  threshold: number;           // Normal kabul edilen maksimum eşik değeri
-  severity: AnomalySeverity;   // Ne kadar acil müdahale gerekli?
-  timestamp: Date;            // Tespit anı
-};
+// Anomali tespiti sonuç tipi — detectZScore/IQR/Seasonal döner.
+export interface AnomalyDetectionResult {
+  isAnomaly: boolean;              // Anomali var mı?
+  score: number;                   // Anomali skoru (0-100)
+  severity: 'low' | 'medium' | 'high' | 'critical'; // Önem derecesi
+  threshold: number;               // Kullanılan eşik değeri
+  detectedAt: Date;                // Tespit zamanı
+}
 
-// Kısa sürede oluşan ani yükseliş/patlamaları yakalar
-export type SpikeDetectionResult = {
-  hasSpike: boolean;           // Grafikte dik bir tepe oluştu mu?
-  baselineValue: number;       // Normal seyreden ortalama değer
-  peakValue: number;           // Patlamanın ulaştığı zirve noktası
-  increasePercentage: number;  // Normalden ne kadar fırladı? (% cinsinden)
-  detectedAt: Date;           // Patlamanın yaşandığı an
-};
+// Spike (ani yükselme) tespit sonucu — detectSpikeInMetric döner.
+export interface SpikeDetectionResult {
+  hasSpike: boolean;               // Spike var mı?
+  increasePercentage: number;      // Yüzde olarak artış
+  currentValue: number;            // Şu anki değer
+  baselineValue: number;           // Referans (baz) değer
+  detectedAt: Date;                // Tespit zamanı
+}
 
-// Tek bir endpoint'in performans ölçümleri
-export type EndpointMetric = {
-  endpoint: string;            // Hangi API yolu? (/api/users gibi)
-  method: string;             // Hangi HTTP metodu? (GET, POST, PUT, vs.)
-  avgLatency?: number;        // Ortalama yanıt süresi (ms)
-  errorRate?: number;         // Hata oranı (0-1 arası, 0.05 = %5 hata)
-  throughput?: number;        // Saniye başına düşen istek sayısı
-};
+// Anomali olay kaydı — getAnomalyHistory döner, alert tetikler.
+export interface AnomalyEvent {
+  id: string;                      // Olay ID (generateId)
+  metricName: string;              // İlgili metrik adı
+  score: number;                   // Anomali skoru
+  severity: 'low' | 'medium' | 'high' | 'critical'; // Önem derecesi
+  value: number;                   // Anomali anındaki değer
+  threshold: number;               // Eşik değeri
+  message: string;                 // Açıklama metni
+  timestamp: Date;                 // Olay zamanı
+}
 
-// Belirli zaman aralığının özet performans raporu
-export type PerformanceReport = {
-  period: { start: Date; end: Date };  // Hangi zaman dilimi?
-  avgLatency: number;          // Tüm endpoint'lerin ortalama gecikmesi
-  p95Latency: number;          // İsteklerin %95'i bu sürenin altında (ms)
-  p99Latency: number;          // İsteklerin %99'u bu sürenin altında (ms)
-  errorRate: number;           // Genel sistem hata oranı
-  throughput: number;          // Sistemin genel işlem kapasitesi
-  topSlowEndpoints: EndpointMetric[];    // En yavaş 5 endpoint (kırmızı alarm)
-  topErrorEndpoints: EndpointMetric[];   // En çok hata alan 5 endpoint
-};
+// Alert tetiklendiğinde çalışacak aksiyon tipi.
+export interface AlertAction {
+  type: 'email' | 'slack' | 'webhook'; // Aksiyon türü
+  config: Record<string, any>;         // Aksiyon ayarları (url, kanal vb.)
+  handler?: (alert: AnomalyEvent) => Promise<void>; // Kullanıcı callback'i (opsiyonel)
+}
 
-// Servisin anlık sağlık kontrolü sonucu
-export type HealthStatus = {
-  serviceName: string;         // Hangi servis?
-  status: 'healthy' | 'degraded' | 'unhealthy';  // Durum ne?
-  uptime: number;             // Ne zamandır ayakta? (saniye)
-  errorRate: number;          // Son dakikadaki hata oranı
-  lastCheck: Date;           // Son sağlık kontrolünün zamanı
-};
+// Anomali alert kuralı — setAnomalyAlert parametresi.
+export interface AlertRule {
+  metricName: string;              // İzlenecek metrik
+  threshold: number;               // Eşik değeri
+  action: AlertAction;             // Tetiklendiğinde ne yapılacak
+}
 
-// Her endpoint için gecikme dağılım istatistikleri
-export type LatencyPercentiles = {
-  endpoint: string;           // Hangi endpoint?
-  p50: number;               // İsteklerin yarısı bu sürede tamamlanır (medyan)
-  p75: number;               // %75'i bu sürenin altında
-  p95: number;               // %95'i bu sürenin altında
-  p99: number;               // %99'u bu sürenin altında (genelde kritik eşik)
-  max: number;               // En yavaş istek (anomalileri gösterir)
-};
+// Performans raporu — generatePerformanceReport döner.
+export interface PerformanceReport {
+  startDate: Date;                 // Rapor başlangıç tarihi
+  endDate: Date;                   // Rapor bitiş tarihi
+  avgLatency: number;              // Ortalama gecikme (ms)
+  p95Latency: number;              // %95 gecikme
+  p99Latency: number;              // %99 gecikme
+  errorRate: number;               // Hata oranı (%)
+  throughput: number;              // Saniyedeki istek sayısı
+  totalRequests: number;           // Toplam istek
+  topSlowEndpoints: Array<{ endpoint: string; avgLatency: number }>; // En yavaş endpoint'ler
+  topErrorEndpoints: Array<{ endpoint: string; errorRate: number }>; // En çok hata verenler
+}
 
-// Her endpoint'in hata detayları
-export type ErrorRateMetrics = {
-  endpoint: string;           // Hangi endpoint?
-  method: string;            // Hangi metot?
-  errorRate: number;         // Hata oranı (0-1 arası)
-  errorCount: number;        // Kaç kere hata aldı?
-  totalRequests: number;     // Toplam kaç istek geldi?
-};
+// Sağlık durumu — getServiceHealthStatus döner.
+export interface HealthStatus {
+  status: 'healthy' | 'degraded' | 'unhealthy'; // Genel durum
+  errorRate: number;               // Hata oranı (%)
+  uptime: number;                  // Çalışma süresi (%)
+  avgLatency: number;              // Ortalama gecikme (ms)
+  dependencies: Array<{ name: string; status: string; latency?: number }>; // Bağımlılık durumları
+  timestamp: Date;                 // Ölçüm zamanı
+}
 
-// Bir uyarı tetiklendiğinde ne yapılacağını tanımlar
-export type AlertAction = {
-  type: 'email' | 'slack' | 'webhook';  // Nereye haber verilecek?
-  config: Record<string, any>;          // O kanala özel ayarlar (email adresi, webhook URL, vs.)
-};
+// Endpoint bazlı metrik — getErrorRateByEndpoint döner.
+export interface ErrorRateMetrics {
+  endpoint: string;                // Endpoint yolu
+  method: string;                  // HTTP metodu
+  errorRate: number;               // Hata oranı (%)
+  totalRequests: number;           // Toplam istek
+  errorCount: number;              // Hata sayısı
+}
 
-// Tespit edilen her anomali için oluşturulan olay kaydı
-export type AnomalyEvent = {
-  metricName: string;                 // Hangi metrikte anomali? (örn: "latency", "error_rate")
-  result: AnomalyDetectionResult;     // Anomali detayları
-  detectedAt: Date;                  // Ne zaman tespit edildi?
-};
+// Endpoint latency percentile — getLatencyPercentiles döner.
+export interface LatencyPercentiles {
+  endpoint: string;                // Endpoint yolu
+  p50: number;                     // Medyan
+  p95: number;                     // %95
+  p99: number;                     // %99
+  max: number;                     // Maksimum
+  min: number;                     // Minimum
+  avg: number;                     // Ortalama
+}
+
+// Sistem genel bakış — getSystemOverview döner.
+export interface SystemOverview {
+  totalServices: number;           // Toplam servis
+  healthyServices: number;         // Sağlıklı servis
+  avgLatency: number;              // Ortalama gecikme
+  errorRate: number;               // Ortalama hata oranı
+  requestsPerSecond: number;       // Saniyedeki istek
+  activeAnomalies: number;         // Aktif anomali sayısı
+  timestamp: Date;                 // Ölçüm zamanı
+}
+
+// Prometheus sorgu sonucu — customMetricQuery döner.
+export interface MetricResult {
+  metric: string;                  // Metrik adı
+  values: Array<{ timestamp: number; value: number }>; // Zaman serisi
+  resultType: 'vector' | 'matrix' | 'scalar'; // Sonuç tipi
+}
+
+// Ödeme metrikleri — businessMetrics.paymentProcessing() döner.
+export interface PaymentMetrics {
+  recordLatency: (ms: number) => void;              // Gecikme kaydı
+  recordSuccess: () => void;                        // Başarılı ödeme
+  recordError: (errorType: string) => void;         // Hatalı ödeme (tip ile)
+  getMetrics: () => Promise<{ count: number; avgLatency: number; errorRate: number }>; // Özet
+}
+
+// Endpoint metrikleri — businessMetrics.apiEndpoint() döner.
+export interface EndpointMetrics {
+  recordLatency: (ms: number) => void;              // Gecikme kaydı
+  recordSuccess: () => void;                        // Başarılı istek
+  recordError: () => void;                          // Hatalı istek
+  getMetrics: () => Promise<{ count: number; avgLatency: number; errorRate: number }>; // Özet
+}
+
+// DB operasyon metrikleri — businessMetrics.databaseOperation() döner.
+export interface DatabaseMetrics {
+  recordLatency: (ms: number) => void;              // Sorgu süresi
+  recordSuccess: () => void;                        // Başarılı sorgu
+  recordError: () => void;                          // Hatalı sorgu
+  recordRowCount: (count: number) => void;          // Etkilenen satır
+}
+
+// 3. parti servis metrikleri — businessMetrics.thirdPartyCall() döner.
+export interface ThirdPartyMetrics {
+  recordLatency: (ms: number) => void;              // Çağrı süresi
+  recordSuccess: () => void;                        // Başarılı çağrı
+  recordError: (errorType: string) => void;         // Hatalı çağrı
+}
+
+// Kullanıcı aksiyon metrikleri — businessMetrics.userAction() döner.
+export interface UserMetrics {
+  recordSuccess: () => void;                        // Başarılı aksiyon
+  recordError: (reason?: string) => void;           // Hatalı aksiyon
+}
