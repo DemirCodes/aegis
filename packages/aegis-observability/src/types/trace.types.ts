@@ -1,109 +1,64 @@
-// src/types/trace.types.ts
-// Distributed tracing (span, trace, korelasyon) için tip tanımları.
+// ============================================================
+// types/trace.types.ts
+// ============================================================
 
-import { LogEntry } from './log.types'; // LogEntry tipini kullanıyoruz
+// Trace Types
 
-// Tek bir span kaydı — OTel'den gelen yapı.
 export interface Span {
-  spanId: string;                      // Span benzersiz ID
-  traceId: string;                     // Ait olduğu trace ID
-  parentSpanId?: string;               // Üst span ID (root ise undefined)
-  name: string;                        // Span adı (örn: "GET /api/users")
-  serviceName: string;                 // Span'ı üreten servis
-  startTime: Date;                     // Başlangıç zamanı
-  endTime: Date;                       // Bitiş zamanı
-  duration: number;                    // Süre (ms)
-  status: 'ok' | 'error' | 'unset';    // Span durumu
-  attributes: Record<string, any>;     // Ek nitelikler (http.method vb.)
-  events?: SpanEvent[];                // Span içi olaylar
+  spanId: string;                 // Span ID
+  traceId: string;                // Trace ID
+  parentSpanId?: string;
+  operationName: string;          // Operasyon adı
+  duration: number;               // Süre
+  status: 'ok' | 'error';         // Durum
+  tags: Record<string, any>;      // Etiketler
+  logs: SpanLog[];                // Span logları
+  startTime: Date;                // Başlangıç zamanı
+  endTime: Date;                  // Bitiş zamanı
 }
 
-// Span içinde gerçekleşen olay (log, exception vb.)
-export interface SpanEvent {
-  name: string;                        // Olay adı
-  timestamp: Date;                     // Olay zamanı
-  attributes: Record<string, any>;     // Olay nitelikleri
+export interface SpanLog {
+  timestamp: Date;                // Zaman damgası
+  fields: Record<string, any>;    // Alanlar
 }
 
-// Trace detayları — getTraceDetails döner.
-export interface TraceDetails {
-  traceId: string;                     // Trace ID
-  rootSpan: Span;                      // Kök span
-  spans: Span[];                       // Tüm span'lar (düz liste)
-  duration: number;                    // Toplam süre (ms)
-  status: 'success' | 'error' | 'partial'; // Genel durum
-  startTime: Date;                     // Başlangıç
-  endTime: Date;                       // Bitiş
-}
-
-// Trace ağaç yapısı — getTraceTree döner.
-export interface TraceTree {
-  rootSpan: Span;                      // Kök span
-  children: TraceTreeNode[];           // Alt span'lar (hiyerarşik)
-}
-
-// Ağaçtaki tek bir düğüm (recursive).
-export interface TraceTreeNode {
-  span: Span;                          // Bu düğümdeki span
-  children: TraceTreeNode[];           // Alt düğümler
-}
-
-// Yavaş trace kaydı — getSlowTraces döner.
-export interface SlowTrace {
-  traceId: string;                     // Trace ID
-  duration: number;                    // Süre (ms)
-  serviceName: string;                 // Servis adı
-  operationName: string;               // İşlem adı
-  startTime: Date;                     // Başlangıç zamanı
-}
-
-// Başarısız trace kaydı — getFailedTraces döner.
-export interface FailedTrace {
-  traceId: string;                     // Trace ID
-  duration: number;                    // Süre (ms)
-  serviceName: string;                 // Servis adı
-  operationName: string;               // İşlem adı
-  errorMessage: string;                // Hata mesajı
-  startTime: Date;                     // Başlangıç zamanı
-}
-
-// Trace + log + audit korelasyon verisi — correlateTraceWithLogs döner.
-export interface CorrelatedData {
-  traceId: string;                     // Trace ID
-  spans: Span[];                       // İlgili span'lar
-  logs: LogEntry[];                    // İlgili log kayıtları
-  auditLogs: AuditLogEntry[];          // İlgili audit kayıtları
-}
-
-// Audit paketinden gelen audit log kaydı (import edilmez, yapısal eşleşme).
-export interface AuditLogEntry {
-  id: string;                          // Audit kayıt ID
-  action: string;                      // Yapılan aksiyon
-  userId?: string;                     // Kullanıcı ID
-  resource: string;                    // Etkilenen kaynak
-  timestamp: Date;                     // Zaman
-  correlationId?: string;              // Korelasyon ID
-  metadata?: Record<string, any>;      // Ek veri
-}
-
-// Servisler arası çağrı kaydı — dependency graph için.
 export interface ServiceCall {
-  from: string;                        // Kaynak servis
-  to: string;                          // Hedef servis
-  callCount: number;                   // Çağrı sayısı
-  avgLatency?: number;                 // Ortalama gecikme
-  errorRate?: number;                  // Hata oranı
+  serviceName: string;            // Servis adı
+  operationName: string;          // Operasyon adı
+  duration: number;               // Süre
+  status: 'ok' | 'error';         // Durum
 }
 
-// Servis bağımlılık grafiği — getDependencyGraph döner.
+export interface TraceDetails {
+  traceId: string;                // Trace ID
+  spans: Span[];                  // Span listesi
+  duration: number;               // Süre
+  status: 'success' | 'error';    // Durum
+  serviceCalls: ServiceCall[];    // Servis çağrıları
+  timestamp: Date;                // Zaman damgası
+}
+
+export interface TraceTree {
+  traceId: string;          // Trace ID
+  rootSpan: Span;           // Kök span
+  children: TraceTree[];    // Alt ağaçlar
+}
+
+export interface SlowTrace {
+  traceId: string;          // Trace ID
+  duration: number;         // Süre
+  operationName: string;    // Operasyon adı
+  timestamp: Date;          // Zaman damgası
+}
+
+export interface FailedTrace {
+  traceId: string;    // Trace ID
+  error: string;      // Hata
+  duration: number;   // Süre
+  timestamp: Date;    // Zaman damgası
+}
+
 export interface DependencyGraph {
-  nodes: string[];                     // Servis düğümleri
-  edges: ServiceCall[];                // Servisler arası çağrılar
-}
-
-// Prometheus sorgu parametresi (internal).
-export interface PrometheusQuery {
-  query: string;                       // PromQL ifadesi
-  time?: Date;                         // Sorgu zamanı
-  timeout?: number;                    // Zaman aşımı (ms)
+  nodes: Array<{ serviceName: string; type: 'service' | 'database' | 'external' }>; // Düğümler
+  edges: Array<{ from: string; to: string; callCount: number }>;                     // Kenarlar
 }

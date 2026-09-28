@@ -429,7 +429,7 @@ const result = await healthCheck.performHealthCheck('database');
 
 **Açıklama:** Tüm kayıtlı servislerin durumunu getirir.
 
-**Dönüş:** `Promise<Record<string, HealthCheckResult>>`
+**Dönüş:** `Promise<Record<string, HealthCheckResult>>` 
 
 **Kullanım:**
 ```typescript

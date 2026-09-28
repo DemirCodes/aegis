@@ -16,25 +16,313 @@ pnpm add @aegis/observability
 
 ---
 
+## 🗂️ Dosya Yapısı
+
+```
+src/
+├── index.ts
+├── middleware/
+│   ├── index.ts
+│   ├── trace-correlation.middleware.ts   → traceCorrelationMiddleware
+│   └── metrics.middleware.ts             → metricsMiddleware
+├── metrics/
+│   ├── index.ts
+│   ├── business-metrics.ts               → businessMetrics (singleton)
+│   ├── anomaly-detector.ts               → anomalyDetector (singleton)
+│   └── metric-definitions.ts             → recordCustomMetric, recordHistogram,
+│                                            recordGauge, recordCounter, getMetricValue
+├── exporters/
+│   ├── index.ts
+│   ├── prometheus-exporter.ts            → prometheusExporter
+│   └── otel-exporter.ts                  → initializeOTelExporter
+├── services/
+│   ├── index.ts
+│   ├── observability.service.ts          → observabilityService (singleton)
+│   ├── logging.service.ts                → searchLogs, getLogStats
+│   ├── trace.service.ts                  → internal trace helpers
+│   └── correlation.service.ts            → internal correlation helpers
+├── types/
+│   ├── index.ts                          → re-export
+│   ├── metrics.types.ts                  → metric ve anomali tipleri
+│   ├── trace.types.ts                    → trace tipleri
+│   └── log.types.ts                      → log tipleri
+└── utils/
+    ├── index.ts
+    ├── anomaly-algorithms.ts             → internal (Z-Score, IQR, Seasonal, Spike)
+    └── metric-helpers.ts                 → internal helpers
+```
+
+---
+
+## 📐 Naming Convention
+
+| Kategori | Kural | Örnek |
+|----------|-------|-------|
+| **Fonksiyonlar** | camelCase | `paymentProcessing()`, `getTraceDetails()` |
+| **Metrik adları** | snake_case | `request_latency`, `error_rate`, `file_upload_size` |
+| **Metric prefix** | `aegis_` (framework branded) | `aegis_request_latency_total` |
+| **Type/Interface** | PascalCase | `TraceDetails`, `AnomalyDetectionResult` |
+| **Enum değerleri** | lowercase | `'low'`, `'critical'`, `'healthy'` |
+| **Env değişkenleri** | UPPER_SNAKE_CASE | `OTEL_ENABLED`, `ELASTICSEARCH_URL` |
+
+---
+
+## 🧩 Import Edilen Tipler
+
+Aşağıdaki tipler **`@aegis/core`**, **`@aegis/audit`** ve **`@aegis/resilience`**'dan import edilir. `@aegis/observability` içinde **yeniden tanımlanmaz** (anayasa Kural 1: Duplikasyon YASAK).
+
+```typescript
+import {
+  Logger,
+  AppError,
+  RetryOptions,
+} from '@aegis/core';
+
+// @aegis/audit'ten
+import type { AuditLog } from '@aegis/audit';
+
+// @aegis/resilience'dan
+import type { HealthCheckResult } from '@aegis/resilience';
+```
+
+### Referans Tipler
+
+| Tip | Kaynak | Açıklama |
+|-----|--------|----------|
+| `Logger` | `@aegis/core` | `{ info, error, warn, debug }` |
+| `AppError` | `@aegis/core` | `class AppError extends Error` |
+| `RetryOptions` | `@aegis/core` | `{ maxRetries, delay, backoffStrategy }` |
+| `AuditLog` | `@aegis/audit` | Audit log entry tipi |
+| `HealthCheckResult` | `@aegis/resilience` | `{ serviceName, status, responseTime, lastCheckedAt }` |
+
+> **NOT:** Bu tipler `@aegis/observability` README'sinde sadece **referans** olarak listelenir. Tam tanımları kendi paketlerinin README'sindedir.
+
+---
+
+## ⚙️ Initialization & Config
+
+### `initObservability(config?)`
+
+**Açıklama:** Observability modülünü başlatır. Env değişkenleri default, config override eder.
+
+| Parametre | Tip | Default | Açıklama |
+|-----------|-----|---------|----------|
+| `config.serviceName` | `string` | `SERVICE_NAME` env | Servis adı |
+| `config.metricPrefix` | `string` | `'aegis_'` | Prometheus metrik prefix'i |
+| `config.enableOtel` | `boolean` | `OTEL_ENABLED` env | OpenTelemetry aktif |
+| `config.enableElasticsearch` | `boolean` | `ELASTICSEARCH_ENABLED` env | ES aktif |
+| `config.enablePrometheus` | `boolean` | `true` | Prometheus aktif |
+| `config.metricBufferSize` | `number` | `1000` | Ring buffer boyutu (metric başına) |
+| `config.retryCount` | `number` | `3` | Prometheus sorgu retry sayısı |
+
+**Dönüş:** `void`
+
+**Kullanım:**
+```typescript
+import { initObservability } from '@aegis/observability';
+
+initObservability({
+  serviceName: 'payment-api',
+  metricPrefix: 'payment_',
+  enableOtel: true,
+  enableElasticsearch: true,
+});
+```
+
+**Env-only kullanım:**
+```bash
+# .env
+SERVICE_NAME=payment-api
+OTEL_ENABLED=true
+ELASTICSEARCH_ENABLED=true
+ELASTICSEARCH_URL=http://localhost:9200
+PROMETHEUS_URL=http://localhost:9090
+```
+
+### `initializeOTelExporter(config?)`
+
+**Açıklama:** OpenTelemetry exporter'ı başlatır. Uygulama başlangıcında **bir kez** çağrılır.
+
+| Parametre | Tip | Default | Açıklama |
+|-----------|-----|---------|----------|
+| `config.serviceName` | `string` | `SERVICE_NAME` env | Servis adı |
+| `config.endpoint` | `string` | `OTEL_EXPORTER_OTLP_ENDPOINT` env | OTLP endpoint |
+
+**Dönüş:** `void`
+
+**Davranış:**
+- `OTEL_ENABLED=false` ise → **no-op** (sessiz döner)
+- `OTEL_ENABLED=true` ise → OTel SDK başlatır
+
+**Kullanım:**
+```typescript
+import { initializeOTelExporter } from '@aegis/observability';
+
+// Uygulama başlangıcında BİR KEZ
+initializeOTelExporter({
+  serviceName: 'payment-api',
+  endpoint: 'http://localhost:4317',
+});
+```
+
+---
+
+## ⚙️ Initialization Davranışı
+
+### `initObservability()` Çağrılmadan Fonksiyon Çağrılırsa?
+
+**Davranış:** **Lazy init + Uyarı log.**
+
+**Kural:**
+- `initObservability()` çağrılmadıysa → ilk fonksiyon çağrısında **otomatik init** yapılır
+- Env değişkenleri default olarak kullanılır (`SERVICE_NAME`, `OTEL_ENABLED`, vb.)
+- Logger `warn` seviyesinde uyarı basar: `'initObservability() not called, using lazy init with env defaults'`
+
+**Neden lazy init?**
+- Geliştirme kolaylığı (küçük projelerde init'i unutabilirsin)
+- Fail-fast geliştiricileri korkutur ve terk ettirir
+- Env değişkenleri zaten default olarak yeterli
+
+**Fail-fast örneği (YANLIŞ olurdu):**
+```typescript
+// ❌ Bu yaklaşım kullanılmıyor
+if (!isInitialized) {
+  throw new AppError('NOT_INITIALIZED', 'Call initObservability() first', 500);
+}
+```
+
+**Doğru davranış:**
+```typescript
+// ✅ Lazy init + uyarı
+if (!isInitialized) {
+  logger.warn('initObservability() not called, using lazy init with env defaults');
+  initObservability(); // env defaults ile
+}
+```
+
+---
+
+### `initObservability()` ve `initializeOTelExporter()` İlişkisi
+
+**Prensip:** **Ayrı Sorumluluk** (Anayasa Kural 1)
+
+Her iki fonksiyon da **bağımsız** çalışır. Biri diğerini tetiklemez.
+
+| Fonksiyon | Sorumluluk |
+|-----------|------------|
+| `initObservability()` | Global config + logger + metric prefix ayarla |
+| `initializeOTelExporter()` | Sadece OTel SDK başlat |
+
+### `initObservability({ enableOtel: true })` Ne Yapar?
+
+- Global config'i ayarlar (`enableOtel: true` olarak işaretler)
+- **OTel SDK'yı BAŞLATMAZ**
+- Sadece "OTel isteniyor" bilgisini saklar
+
+### Kullanıcı İkisini de Çağırmalı
+
+```typescript
+// ✅ DOĞRU KULLANIM
+import { initObservability, initializeOTelExporter } from '@aegis/observability';
+
+// 1. Config
+initObservability({ 
+  serviceName: 'payment-api',
+  enableOtel: true,
+});
+
+// 2. OTel SDK (ayrı sorumluluk)
+initializeOTelExporter({
+  serviceName: 'payment-api',
+  endpoint: 'http://localhost:4317',
+});
+```
+
+### Idempotent Davranış
+
+Her iki fonksiyon da **idempotent**'tır. Aynı işlevi iki kez çağırmak zarar vermez.
+
+**`initObservability()` ikinci çağrı:**
+```typescript
+initObservability(); // İlk çağrı - uygulanır
+initObservability(); // İkinci çağrı - logger.warn + ignore
+// Log: "initObservability() already called, ignoring duplicate call"
+```
+
+**`initializeOTelExporter()` ikinci çağrı:**
+```typescript
+initializeOTelExporter(); // İlk çağrı - OTel başlatılır
+initializeOTelExporter(); // İkinci çağrı - logger.warn + ignore
+// Log: "initializeOTelExporter() already called, ignoring duplicate call"
+```
+
+**`OTEL_ENABLED=false` durumu:**
+```typescript
+initializeOTelExporter(); // no-op (sessiz döner, hata YOK)
+```
+
+**Çift init YOK!** Çünkü her fonksiyon kendi flag'ini kontrol eder:
+```typescript
+let isInitialized = false;
+let isOtelInitialized = false;
+
+export function initObservability(config?) {
+  if (isInitialized) {
+    logger.warn('initObservability() already called, ignoring duplicate call');
+    return;
+  }
+  // ... setup
+  isInitialized = true;
+}
+
+export function initializeOTelExporter(config?) {
+  const enabled = config?.enableOtel ?? (process.env.OTEL_ENABLED === 'true');
+  if (!enabled) {
+    logger.debug('OTel disabled, skipping initialization');
+    return;
+  }
+  if (isOtelInitialized) {
+    logger.warn('initializeOTelExporter() already called, ignoring duplicate call');
+    return;
+  }
+  // ... OTel SDK setup
+  isOtelInitialized = true;
+}
+```
+
+### Özet Tablo
+
+| Senaryo | Davranış |
+|---------|----------|
+| `OTEL_ENABLED=false` + `initializeOTelExporter()` | No-op (sessiz) |
+| `initObservability({ enableOtel: true })` + `initializeOTelExporter()` | Her ikisi bağımsız çalışır, çift init YOK |
+| `initObservability()` + `initObservability()` | İkinci çağrı: `warn` + ignore |
+| `initializeOTelExporter()` + `initializeOTelExporter()` | İkinci çağrı: `warn` + ignore |
+| `initObservability()` çağrılmadan herhangi bir fonksiyon | Lazy init + `warn` |
+
+---
+
 ## 🚀 Hızlı Başlangıç
 
 ```typescript
 import express from 'express';
 import {
+  initObservability,
   traceCorrelationMiddleware,
   metricsMiddleware,
   prometheusExporter,
 } from '@aegis/observability';
 
+// 1. Önce init
+initObservability({ serviceName: 'my-api' });
+
 const app = express();
 
-// Trace ID otomatik enjeksiyonu
+// 2. Middleware
 app.use(traceCorrelationMiddleware());
-
-// HTTP metrikleri toplama
 app.use(metricsMiddleware());
 
-// Prometheus /metrics endpoint
+// 3. Prometheus endpoint
 app.get('/metrics', prometheusExporter());
 ```
 
@@ -46,9 +334,14 @@ app.get('/metrics', prometheusExporter());
 
 **Açıklama:** Her isteğe trace-id enjekte eder. Loglara, downstream call'lara ve response header'larına ekler.
 
-**Dönüş:** Express middleware
+**Dönüş:** `RequestHandler` (Express middleware)
 
-**Kullandığı Core:** `core.generateId()`
+**Kullandığı Core:** `core.generateId()` → `string`
+
+**Davranış:**
+- Request'te `X-Trace-Id` header'ı varsa → kullanır
+- Yoksa → `core.generateId()` ile üretir
+- Response'a `X-Trace-Id` header'ı ekler
 
 **Kullanım:**
 ```typescript
@@ -63,12 +356,16 @@ app.use(traceCorrelationMiddleware());
 
 **Açıklama:** HTTP metriklerini otomatik toplar (latency, error rate, throughput).
 
-**Dönüş:** Express middleware
+**Dönüş:** `RequestHandler` (Express middleware)
+
+**Topladığı metrikler:**
+- `aegis_http_request_duration_seconds` (histogram)
+- `aegis_http_requests_total` (counter)
+- `aegis_http_errors_total` (counter)
 
 **Kullanım:**
 ```typescript
 app.use(metricsMiddleware());
-// Her endpoint için: request_latency, request_count, error_rate
 ```
 
 ---
@@ -77,7 +374,11 @@ app.use(metricsMiddleware());
 
 **Açıklama:** Prometheus'un çekebileceği `/metrics` endpoint'i sağlar.
 
-**Dönüş:** Express middleware
+**Dönüş:** `RequestHandler` (Express middleware)
+
+**Davranış:**
+- `prom-client` registry'sindeki tüm metrikleri döner
+- Content-Type: `text/plain; version=0.0.4`
 
 **Kullanım:**
 ```typescript
@@ -89,24 +390,29 @@ app.get('/metrics', prometheusExporter());
 
 ## 📌 Business Metrics
 
-### `paymentProcessing()`
+**Namespace:** `businessMetrics.*` (singleton)
+
+> **NOT:** Metric instance'ları **singleton**'dır. Her çağrıda aynı obje döner (metric double-count önlenir). Cache `Map<string, Metrics>` ile tutulur.
+
+### `businessMetrics.paymentProcessing()`
 
 **Açıklama:** Ödeme işlemlerinin metriklerini track eder.
 
-**Dönüş:** `PaymentMetrics` object
+**Dönüş:** `PaymentMetrics`
+
+**Davranış:** Singleton (her çağrıda aynı obje)
 
 **Kullanım:**
 ```typescript
 const metric = businessMetrics.paymentProcessing();
-
-metric.recordLatency(1500);        // 1.5 saniye
-metric.recordSuccess();            // Başarılı ödeme
-metric.recordError('insufficient_funds');  // Hata tipi ile
+metric.recordLatency(1500);
+metric.recordSuccess();
+metric.recordError('insufficient_funds');
 ```
 
 ---
 
-### `apiEndpoint(endpoint, method)`
+### `businessMetrics.apiEndpoint(endpoint, method)`
 
 **Açıklama:** Spesifik bir API endpoint'inin metriklerini track eder.
 
@@ -115,19 +421,20 @@ metric.recordError('insufficient_funds');  // Hata tipi ile
 | `endpoint` | `string` | `/api/users` |
 | `method` | `string` | `GET`, `POST`, `PUT`, `DELETE` |
 
-**Dönüş:** `EndpointMetrics` object
+**Dönüş:** `EndpointMetrics`
+
+**Davranış:** Endpoint+method başına singleton (cache'li)
 
 **Kullanım:**
 ```typescript
 const metric = businessMetrics.apiEndpoint('/api/users', 'POST');
-
-metric.recordLatency(250);   // 250ms
+metric.recordLatency(250);
 metric.recordSuccess();
 ```
 
 ---
 
-### `databaseOperation(operation)`
+### `businessMetrics.databaseOperation(operation)`
 
 **Açıklama:** DB sorgularının latency ve row count'unu track eder.
 
@@ -135,7 +442,9 @@ metric.recordSuccess();
 |-----------|-----|----------|
 | `operation` | `string` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
 
-**Dönüş:** `DatabaseMetrics` object
+**Dönüş:** `DatabaseMetrics`
+
+**Davranış:** Operation başına singleton
 
 **Kullanım:**
 ```typescript
@@ -146,15 +455,17 @@ metric.recordSuccess();
 
 ---
 
-### `thirdPartyCall(serviceName)`
+### `businessMetrics.thirdPartyCall(serviceName)`
 
-**Açıklama:** Dış API çağrılarının (Stripe, AWS, SendGrid) metriklerini track eder.
+**Açıklama:** Dış API çağrılarının metriklerini track eder.
 
 | Parametre | Tip | Açıklama |
 |-----------|-----|----------|
 | `serviceName` | `string` | `Stripe`, `AWS`, `SendGrid` |
 
-**Dönüş:** `ThirdPartyMetrics` object
+**Dönüş:** `ThirdPartyMetrics`
+
+**Davranış:** Service başına singleton
 
 **Kullanım:**
 ```typescript
@@ -165,15 +476,17 @@ metric.recordError('timeout');
 
 ---
 
-### `userAction(actionType)`
+### `businessMetrics.userAction(actionType)`
 
-**Açıklama:** Kullanıcı aksiyonlarını (login, signup, purchase) track eder.
+**Açıklama:** Kullanıcı aksiyonlarını track eder.
 
 | Parametre | Tip | Açıklama |
 |-----------|-----|----------|
 | `actionType` | `string` | `login`, `signup`, `purchase`, `logout` |
 
-**Dönüş:** `UserMetrics` object
+**Dönüş:** `UserMetrics`
+
+**Davranış:** Action tipi başına singleton
 
 **Kullanım:**
 ```typescript
@@ -183,19 +496,33 @@ metric.recordSuccess();
 
 ---
 
+## 📌 Metric Definitions
+
+**Namespace:** Direkt named export (standalone fonksiyonlar)
+
 ### `recordCustomMetric(name, value, options?)`
 
-**Açıklama:** Serbest metrik kaydı.
+**Açıklama:** Serbest metrik kaydı. Label set'i cache'lenir.
 
 | Parametre | Tip | Açıklama |
 |-----------|-----|----------|
-| `name` | `string` | Metrik adı |
+| `name` | `string` | Metrik adı (snake_case) |
 | `value` | `number` | Değer |
 | `options.tags` | `Record<string, string>` | Etiketler |
 
+**Dönüş:** `void`
+
+**Hata Davranışı:**
+- Aynı metric + **farklı label key** → `AppError('LABEL_MISMATCH', ...)`
+
 **Kullanım:**
 ```typescript
+// ✅ OK
 recordCustomMetric('file_upload_size', 1024, { tags: { user: 'user-123' } });
+recordCustomMetric('file_upload_size', 2048, { tags: { user: 'user-456' } });
+
+// ❌ HATA (farklı label key)
+recordCustomMetric('file_upload_size', 1024, { tags: { userId: 'user-123' } });
 ```
 
 ---
@@ -208,6 +535,8 @@ recordCustomMetric('file_upload_size', 1024, { tags: { user: 'user-123' } });
 |-----------|-----|----------|
 | `name` | `string` | Metrik adı |
 | `value` | `number` | Değer |
+
+**Dönüş:** `void`
 
 **Kullanım:**
 ```typescript
@@ -225,6 +554,8 @@ recordHistogram('response_time', 250);
 | `name` | `string` | Metrik adı |
 | `value` | `number` | Değer |
 
+**Dönüş:** `void`
+
 **Kullanım:**
 ```typescript
 recordGauge('active_connections', 42);
@@ -241,6 +572,8 @@ recordGauge('active_connections', 42);
 | `name` | `string` | - | Metrik adı |
 | `increment` | `number` | `1` | Artış miktarı |
 
+**Dönüş:** `void`
+
 **Kullanım:**
 ```typescript
 recordCounter('total_requests');
@@ -251,7 +584,7 @@ recordCounter('total_errors', 2);
 
 ### `getMetricValue(name)`
 
-**Açıklama:** Anlık metrik değerini okur.
+**Açıklama:** Anlık metrik değerini okur (local buffer'dan).
 
 | Parametre | Tip | Açıklama |
 |-----------|-----|----------|
@@ -259,19 +592,23 @@ recordCounter('total_errors', 2);
 
 **Dönüş:** `Promise<number | null>`
 
-**Kullandığı:** `customMetricQuery()` (basitleştirilmiş)
+**Davranış:**
+- Local ring buffer'da varsa → değeri döner
+- Yoksa → `null` döner (hata fırlatmaz)
 
 **Kullanım:**
 ```typescript
 const activeUsers = await getMetricValue('active_users');
-// 42
+// 42 veya null
 ```
 
 ---
 
 ## 📌 Anomaly Detector
 
-### `detectZScoreAnomaly(dataPoints, threshold?)`
+**Namespace:** `anomalyDetector.*` (singleton)
+
+### `anomalyDetector.detectZScoreAnomaly(dataPoints, threshold?)`
 
 **Açıklama:** Z-score algoritması ile anomali tespiti.
 
@@ -282,16 +619,20 @@ const activeUsers = await getMetricValue('active_users');
 
 **Dönüş:** `Promise<AnomalyDetectionResult>`
 
+**Hata Davranışı:**
+- Boş array → `{ isAnomaly: false, score: 0, ... }` (hata YOK)
+- Tek elemanlı array → `{ isAnomaly: false, score: 0, ... }` (std=0)
+
 **Kullanım:**
 ```typescript
-const latencies = [150, 160, 155, 2000, 165]; // 2000 anomali
+const latencies = [150, 160, 155, 2000, 165];
 const result = await anomalyDetector.detectZScoreAnomaly(latencies, 3);
-// { isAnomaly: true, severity: 'critical' }
+// { isAnomaly: true, score: 8.5, severity: 'critical' }
 ```
 
 ---
 
-### `detectIQRAnomaly(dataPoints, multiplier?)`
+### `anomalyDetector.detectIQRAnomaly(dataPoints, multiplier?)`
 
 **Açıklama:** IQR (Interquartile Range) ile robust anomali tespiti.
 
@@ -302,6 +643,9 @@ const result = await anomalyDetector.detectZScoreAnomaly(latencies, 3);
 
 **Dönüş:** `Promise<AnomalyDetectionResult>`
 
+**Hata Davranışı:**
+- Boş array → `{ isAnomaly: false, score: 0 }`
+
 **Kullanım:**
 ```typescript
 const result = await anomalyDetector.detectIQRAnomaly(latencies, 1.5);
@@ -309,33 +653,52 @@ const result = await anomalyDetector.detectIQRAnomaly(latencies, 1.5);
 
 ---
 
-### `detectSeasonalAnomaly(dataPoints, period?)`
+### `anomalyDetector.detectSeasonalAnomaly(dataPoints, period?)`
 
-**Açıklama:** Mevsimsel/periodik anomali tespiti.
+**Açıklama:** Mevsimsel/periodik anomali tespiti (Moving Average Decomposition).
 
-| Parametre | Tip | Açıklama |
-|-----------|-----|----------|
-| `dataPoints` | `number[]` | Veri noktaları |
-| `period` | `number` | Periyot uzunluğu (örn: 24 saat) |
+| Parametre | Tip | Default | Açıklama |
+|-----------|-----|---------|----------|
+| `dataPoints` | `number[]` | - | Veri noktaları |
+| `period` | `number` | `24` | Periyot uzunluğu |
 
 **Dönüş:** `Promise<AnomalyDetectionResult>`
 
+**Algoritma:** Basit Moving Average Decomposition (STL değil)
+
+**Adımlar:**
+1. Veri noktalarını `period`'a göre grupla
+2. Her grup için moving average hesapla
+3. Trend = tüm veri ortalaması
+4. Seasonal = grup ortalaması - trend
+5. Residual = veri - trend - seasonal
+6. Residual'da Z-Score uygula (threshold: 3)
+
+**Neden STL değil?**
+- STL ağır (dış bağımlılık: `stl-js` vb.)
+- Basit moving average framework için yeterli
+- Bağımlılık yok (pure JS)
+
+**Hata Davranışı:**
+- `dataPoints.length < period * 2` → `AppError('INSUFFICIENT_DATA', 'At least 2 periods required', 400)`
+- `period <= 0` → `AppError('INVALID_PERIOD', 'Period must be > 0', 400)`
+
 **Kullanım:**
 ```typescript
-const hourlySales = [...]; // 7 günlük saatlik veri
+const hourlySales = [...]; // 7 gün × 24 saat = 168 veri noktası
 const result = await anomalyDetector.detectSeasonalAnomaly(hourlySales, 24);
 ```
 
 ---
 
-### `detectSpikeInMetric(metricName, threshold?)`
+### `anomalyDetector.detectSpikeInMetric(metricName, threshold?)`
 
-**Açıklama:** Prometheus metriğinde ani yükselme tespiti.
+**Açıklama:** Metrikte ani yükselme tespiti.
 
-| Parametre | Tip | Açıklama |
-|-----------|-----|----------|
-| `metricName` | `string` | Metrik adı (`error_rate`) |
-| `threshold` | `number` | Yükselme eşiği (%) |
+| Parametre | Tip | Default | Açıklama |
+|-----------|-----|---------|----------|
+| `metricName` | `string` | - | Metrik adı |
+| `threshold` | `number` | `200` | Yükselme eşiği (%) |
 
 **Dönüş:** `Promise<SpikeDetectionResult>`
 
@@ -347,9 +710,9 @@ const spike = await anomalyDetector.detectSpikeInMetric('error_rate', 200);
 
 ---
 
-### `getAnomalyScore(metricName)`
+### `anomalyDetector.getAnomalyScore(metricName)`
 
-**Açıklama:** Sürekli risk skoru (0-100).
+**Açıklama:** Sürekli risk skoru (0-100). Ağırlıklı ortalama formülü kullanır.
 
 | Parametre | Tip | Açıklama |
 |-----------|-----|----------|
@@ -359,15 +722,39 @@ const spike = await anomalyDetector.detectSpikeInMetric('error_rate', 200);
 
 **Kullandığı:** `detectZScoreAnomaly()` + `detectIQRAnomaly()`
 
+**Formül:**
+```
+score = (zScore_normalized * 0.6) + (iqrScore_normalized * 0.4)
+```
+
+**Normalizasyon:**
+- `zScore_normalized` = `min(100, abs(zScore) * 20)`
+- `iqrScore_normalized` = `min(100, abs(iqrScore) * 25)`
+
+**Ağırlıklar:**
+- Z-Score: %60
+- IQR: %40
+
+**Severity Mapping:**
+| Score | Severity |
+|-------|----------|
+| 0-25 | `low` |
+| 26-50 | `medium` |
+| 51-75 | `high` |
+| 76-100 | `critical` |
+
+**Hata Davranışı:**
+- Metrik bulunamazsa → `0` döner
+
 **Kullanım:**
 ```typescript
 const score = await anomalyDetector.getAnomalyScore('error_rate');
-// 75 → high risk
+// 75
 ```
 
 ---
 
-### `getAnomalyHistory(metricName?, limit?)`
+### `anomalyDetector.getAnomalyHistory(metricName?, limit?)`
 
 **Açıklama:** Geçmiş anomali kayıtlarını getirir.
 
@@ -385,9 +772,9 @@ const history = await anomalyDetector.getAnomalyHistory('error_rate', 50);
 
 ---
 
-### `setAnomalyAlert(rule)`
+### `anomalyDetector.setAnomalyAlert(rule)`
 
-**Açıklama:** Otomatik anomali alert'i kurar.
+**Açıklama:** Otomatik anomali alert'i kurar. **Callback pattern** kullanır.
 
 | Parametre | Tip | Açıklama |
 |-----------|-----|----------|
@@ -395,15 +782,29 @@ const history = await anomalyDetector.getAnomalyHistory('error_rate', 50);
 | `rule.threshold` | `number` | Eşik |
 | `rule.action.type` | `'email' \| 'slack' \| 'webhook'` | Alert tipi |
 | `rule.action.config` | `Record<string, any>` | Alert yapılandırması |
+| `rule.action.handler` | `(alert: AnomalyEvent) => Promise<void>` | **Kullanıcı sağlar** (opsiyonel) |
 
 **Dönüş:** `Promise<string>` - Alert ID
+
+**Davranış:**
+- `handler` varsa → anomali tetiklendiğinde çağrılır
+- `handler` yoksa → sadece log'a yazar (`logger.warn`)
 
 **Kullanım:**
 ```typescript
 const alertId = await anomalyDetector.setAnomalyAlert({
   metricName: 'error_rate',
   threshold: 50,
-  action: { type: 'slack', config: { webhook: 'https://hooks.slack.com/...' } }
+  action: {
+    type: 'slack',
+    config: { webhook: 'https://hooks.slack.com/...' },
+    handler: async (alert) => {
+      await fetch(alert.action.config.webhook, {
+        method: 'POST',
+        body: JSON.stringify(alert),
+      });
+    },
+  },
 });
 ```
 
@@ -411,7 +812,11 @@ const alertId = await anomalyDetector.setAnomalyAlert({
 
 ## 📌 Observability Service
 
-### `getTraceDetails(traceId)`
+**Namespace:** `observabilityService.*` (singleton)
+
+> **NOT:** `correlateTraceWithLogs` **sadece** `observabilityService` üzerinden erişilir. Standalone export YOK.
+
+### `observabilityService.getTraceDetails(traceId)`
 
 **Açıklama:** Trace'in tüm span'larını getirir.
 
@@ -421,6 +826,9 @@ const alertId = await anomalyDetector.setAnomalyAlert({
 
 **Dönüş:** `Promise<TraceDetails>`
 
+**Hata Davranışı:**
+- Trace yoksa → `AppError('TRACE_NOT_FOUND', ...)`
+
 **Kullanım:**
 ```typescript
 const trace = await observabilityService.getTraceDetails('trace-abc');
@@ -429,7 +837,7 @@ const trace = await observabilityService.getTraceDetails('trace-abc');
 
 ---
 
-### `getTraceTree(traceId)`
+### `observabilityService.getTraceTree(traceId)`
 
 **Açıklama:** Trace'i hiyerarşik ağaç olarak döndürür.
 
@@ -449,7 +857,7 @@ const tree = await observabilityService.getTraceTree('trace-abc');
 
 ---
 
-### `getSlowTraces(threshold?, limit?)`
+### `observabilityService.getSlowTraces(threshold?, limit?)`
 
 **Açıklama:** Belirli süreden yavaş trace'leri listeler.
 
@@ -468,7 +876,7 @@ const slowTraces = await observabilityService.getSlowTraces(500, 20);
 
 ---
 
-### `getFailedTraces(limit?)`
+### `observabilityService.getFailedTraces(limit?)`
 
 **Açıklama:** Başarısız trace'leri listeler.
 
@@ -485,7 +893,7 @@ const failed = await observabilityService.getFailedTraces(50);
 
 ---
 
-### `correlateTraceWithLogs(traceId)`
+### `observabilityService.correlateTraceWithLogs(traceId)`
 
 **Açıklama:** Trace + log + audit korelasyonu.
 
@@ -495,7 +903,8 @@ const failed = await observabilityService.getFailedTraces(50);
 
 **Dönüş:** `Promise<CorrelatedData>`
 
-**Kullandığı:** `audit.getAuditLogByCorrelationId()`
+**Kullandığı:**
+- `audit.getAuditLogByCorrelationId(traceId)` → `Promise<AuditLog[]>`
 
 **Kullanım:**
 ```typescript
@@ -505,7 +914,7 @@ const correlated = await observabilityService.correlateTraceWithLogs('trace-erro
 
 ---
 
-### `generatePerformanceReport(startDate, endDate)`
+### `observabilityService.generatePerformanceReport(startDate, endDate)`
 
 **Açıklama:** Sistem performans raporu oluşturur.
 
@@ -515,6 +924,10 @@ const correlated = await observabilityService.correlateTraceWithLogs('trace-erro
 | `endDate` | `Date` | Bitiş |
 
 **Dönüş:** `Promise<PerformanceReport>`
+
+**Veri Kaynakları:**
+- Latency/error/throughput → Prometheus HTTP API
+- Trace detayları → OTel in-memory store
 
 **Kullanım:**
 ```typescript
@@ -527,13 +940,14 @@ const report = await observabilityService.generatePerformanceReport(
 
 ---
 
-### `getServiceHealthStatus()`
+### `observabilityService.getServiceHealthStatus()`
 
 **Açıklama:** Birleşik sağlık durumu. Kendi metrik verisi + resilience health check'lerini birleştirir.
 
 **Dönüş:** `Promise<HealthStatus>`
 
-**Kullandığı:** `resilience.getAllHealthStatus()`
+**Kullandığı:**
+- `resilience.getAllHealthStatus()` → `Promise<Record<string, HealthCheckResult>>`
 
 **Kullanım:**
 ```typescript
@@ -543,14 +957,14 @@ const health = await observabilityService.getServiceHealthStatus();
 
 ---
 
-### `getErrorRateByEndpoint(options?)`
+### `observabilityService.getErrorRateByEndpoint(options?)`
 
 **Açıklama:** Endpoint bazlı hata oranlarını getirir.
 
-| Parametre | Tip | Açıklama |
-|-----------|-----|----------|
-| `options.timeWindow` | `'hour' \| 'day' \| 'week'` | Zaman aralığı |
-| `options.threshold` | `number` | Sadece bu eşiği aşanlar |
+| Parametre | Tip | Default | Açıklama |
+|-----------|-----|---------|----------|
+| `options.timeWindow` | `'hour' \| 'day' \| 'week'` | `'hour'` | Zaman aralığı |
+| `options.threshold` | `number` | `0` | Sadece bu eşiği aşanlar |
 
 **Dönüş:** `Promise<ErrorRateMetrics[]>`
 
@@ -562,7 +976,7 @@ const errorRates = await observabilityService.getErrorRateByEndpoint({ threshold
 
 ---
 
-### `getLatencyPercentiles(endpoint)`
+### `observabilityService.getLatencyPercentiles(endpoint)`
 
 **Açıklama:** Endpoint'in latency percentile'larını getirir.
 
@@ -580,9 +994,9 @@ const percentiles = await observabilityService.getLatencyPercentiles('/api/users
 
 ---
 
-### `customMetricQuery(promql)`
+### `observabilityService.customMetricQuery(promql)`
 
-**Açıklama:** Serbest PromQL sorgusu gönderir.
+**Açıklama:** Serbest PromQL sorgusu gönderir (Prometheus HTTP API).
 
 | Parametre | Tip | Açıklama |
 |-----------|-----|----------|
@@ -590,7 +1004,12 @@ const percentiles = await observabilityService.getLatencyPercentiles('/api/users
 
 **Dönüş:** `Promise<MetricResult>`
 
-**Kullandığı Core:** `core.retry()` (resilience)
+**Kullandığı:**
+- `core.retry()` → `Promise<T>` (Prometheus sorgu retry)
+- `PROMETHEUS_URL` env
+
+**Hata Davranışı:**
+- `PROMETHEUS_URL` yoksa → `AppError('PROMETHEUS_NOT_CONFIGURED', ...)`
 
 **Kullanım:**
 ```typescript
@@ -601,13 +1020,16 @@ const result = await observabilityService.customMetricQuery(
 
 ---
 
-### `getSystemOverview()`
+### `observabilityService.getSystemOverview()`
 
 **Açıklama:** Tüm sistemin özetini döndürür.
 
 **Dönüş:** `Promise<SystemOverview>`
 
-**Kullandığı:** `getServiceHealthStatus()`, `getErrorRateByEndpoint()`, `getLatencyPercentiles()`
+**Kullandığı:**
+- `getServiceHealthStatus()`
+- `getErrorRateByEndpoint()`
+- `getLatencyPercentiles()`
 
 **Kullanım:**
 ```typescript
@@ -617,9 +1039,9 @@ const overview = await observabilityService.getSystemOverview();
 
 ---
 
-### `getDependencyGraph()`
+### `observabilityService.getDependencyGraph()`
 
-**Açıklama:** Servis bağımlılık grafiğini oluşturur.
+**Açıklama:** Servis bağımlılık grafiğini oluşturur (OTel span parent-child ilişkilerinden).
 
 **Dönüş:** `Promise<DependencyGraph>`
 
@@ -633,6 +1055,8 @@ const graph = await observabilityService.getDependencyGraph();
 
 ## 📌 Logging
 
+**Namespace:** Direkt named export
+
 ### `searchLogs(query, options?)`
 
 **Açıklama:** Elasticsearch'te log arama yapar.
@@ -640,13 +1064,19 @@ const graph = await observabilityService.getDependencyGraph();
 | Parametre | Tip | Açıklama |
 |-----------|-----|----------|
 | `query` | `string` | Arama terimi |
-| `options.level` | `string` | Log seviyesi filtresi |
+| `options.level` | `'debug' \| 'info' \| 'warn' \| 'error'` | Log seviyesi filtresi |
 | `options.service` | `string` | Servis filtresi |
 | `options.startDate` | `Date` | Başlangıç |
 | `options.endDate` | `Date` | Bitiş |
-| `options.limit` | `number` | Max kayıt |
+| `options.limit` | `number` | Max kayıt (default: 100) |
 
 **Dönüş:** `Promise<LogSearchResult>`
+
+**Hata Davranışı:**
+- `ELASTICSEARCH_ENABLED=false` → **Uyarı log + boş sonuç döner**
+  ```typescript
+  { total: 0, logs: [], took: 0 }
+  ```
 
 **Kullanım:**
 ```typescript
@@ -672,6 +1102,12 @@ const logs = await searchLogs('timeout', {
 
 **Dönüş:** `Promise<LogStats>`
 
+**Hata Davranışı:**
+- `ELASTICSEARCH_ENABLED=false` → **Uyarı log + boş sonuç döner**
+  ```typescript
+  { totalLogs: 0, byLevel: {}, byService: {}, errorRate: 0 }
+  ```
+
 **Kullanım:**
 ```typescript
 const stats = await getLogStats({ service: 'api' });
@@ -680,19 +1116,433 @@ const stats = await getLogStats({ service: 'api' });
 
 ---
 
+## 📖 Type Definitions
+
+### Enum Types
+
+```typescript
+export type AnomalySeverity = 'low' | 'medium' | 'high' | 'critical';
+
+export type HealthStatusLevel = 'healthy' | 'degraded' | 'unhealthy';
+
+export type TimeWindow = 'hour' | 'day' | 'week';
+
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+export type AlertActionType = 'email' | 'slack' | 'webhook';
+```
+
+### Anomaly Types
+
+```typescript
+export interface AnomalyDetectionResult {
+  isAnomaly: boolean;
+  score: number;
+  threshold: number;
+  severity: AnomalySeverity;
+  timestamp: Date;
+}
+
+export interface SpikeDetectionResult {
+  hasSpike: boolean;
+  baselineValue: number;
+  peakValue: number;
+  increasePercentage: number;
+  detectedAt: Date;
+}
+
+export interface AnomalyEvent {
+  id: string;
+  metricName: string;
+  result: AnomalyDetectionResult;
+  detectedAt: Date;
+}
+
+export interface AlertAction {
+  type: AlertActionType;
+  config: Record<string, any>;
+  handler?: (alert: AnomalyEvent) => Promise<void>;
+}
+
+export interface AlertRule {
+  metricName: string;
+  threshold: number;
+  action: AlertAction;
+}
+```
+
+### Business Metric Types
+
+```typescript
+export interface PaymentMetrics {
+  recordLatency(ms: number): void;
+  recordSuccess(): void;
+  recordError(errorType: string): void;
+}
+
+export interface EndpointMetrics {
+  recordLatency(ms: number): void;
+  recordSuccess(): void;
+  recordError(): void;
+}
+
+export interface DatabaseMetrics {
+  recordLatency(ms: number): void;
+  recordSuccess(): void;
+  recordError(): void;
+}
+
+export interface ThirdPartyMetrics {
+  recordLatency(ms: number): void;
+  recordSuccess(): void;
+  recordError(errorType: string): void;
+}
+
+export interface UserMetrics {
+  recordSuccess(): void;
+  recordError(): void;
+}
+```
+
+### Trace Types
+
+```typescript
+export interface Span {
+  spanId: string;
+  traceId: string;
+  operationName: string;
+  duration: number;
+  status: 'ok' | 'error';
+  tags: Record<string, any>;
+  logs: SpanLog[];
+  startTime: Date;
+  endTime: Date;
+}
+
+export interface SpanLog {
+  timestamp: Date;
+  fields: Record<string, any>;
+}
+
+export interface ServiceCall {
+  serviceName: string;
+  operationName: string;
+  duration: number;
+  status: 'ok' | 'error';
+}
+
+export interface TraceDetails {
+  traceId: string;
+  spans: Span[];
+  duration: number;
+  status: 'success' | 'error';
+  serviceCalls: ServiceCall[];
+  timestamp: Date;
+}
+
+export interface TraceTree {
+  traceId: string;
+  rootSpan: Span;
+  children: TraceTree[];
+}
+
+export interface SlowTrace {
+  traceId: string;
+  duration: number;
+  operationName: string;
+  timestamp: Date;
+}
+
+export interface FailedTrace {
+  traceId: string;
+  error: string;
+  duration: number;
+  timestamp: Date;
+}
+
+export interface LogEntry {
+  timestamp: Date;
+  level: LogLevel;
+  message: string;
+  traceId?: string;
+  service?: string;
+  [key: string]: any;
+}
+
+export interface CorrelatedData {
+  traceId: string;
+  spans: Span[];
+  logs: LogEntry[];
+  correlatedEvents: Array<{
+    span: Span;
+    logs: LogEntry[];
+  }>;
+}
+
+export interface DependencyGraph {
+  nodes: Array<{ serviceName: string; type: 'service' | 'database' | 'external' }>;
+  edges: Array<{ from: string; to: string; callCount: number }>;
+}
+```
+
+### Report Types
+
+```typescript
+export interface PerformanceReport {
+  period: { start: Date; end: Date };
+  avgLatency: number;
+  p95Latency: number;
+  p99Latency: number;
+  errorRate: number;
+  throughput: number;
+  topSlowEndpoints: EndpointMetric[];
+  topErrorEndpoints: EndpointMetric[];
+}
+
+export interface EndpointMetric {
+  endpoint: string;
+  method: string;
+  avgLatency?: number;
+  errorRate?: number;
+  throughput?: number;
+}
+
+export interface LatencyPercentiles {
+  endpoint: string;
+  p50: number;
+  p75: number;
+  p95: number;
+  p99: number;
+  max: number;
+}
+
+export interface ErrorRateMetrics {
+  endpoint: string;
+  method: string;
+  errorRate: number;
+  errorCount: number;
+  totalRequests: number;
+}
+
+export interface HealthStatus {
+  status: HealthStatusLevel;
+  uptime: number;
+  errorRate: number;
+  lastCheck: Date;
+}
+
+export interface SystemOverview {
+  totalServices: number;
+  healthyServices: number;
+  degradedServices: number;
+  unhealthyServices: number;
+  totalRequests: number;
+  avgLatency: number;
+  errorRate: number;
+  timestamp: Date;
+}
+```
+
+### Log Types
+
+```typescript
+export interface LogSearchResult {
+  total: number;
+  logs: LogEntry[];
+  took: number;
+}
+
+export interface LogStats {
+  totalLogs: number;
+  byLevel: Record<string, number>;
+  byService: Record<string, number>;
+  errorRate: number;
+}
+```
+
+### Prometheus Types
+
+```typescript
+export interface PrometheusQuery {
+  expression: string;
+  start: Date;
+  end: Date;
+  step?: string;
+}
+
+export interface MetricResult {
+  metric: Record<string, string>;
+  value: number[];
+  timestamps: Date[];
+}
+```
+
+---
+
+## 📊 Config Values & Defaults
+
+| Değer | Default | Açıklama |
+|-------|---------|----------|
+| `METRIC_BUFFER_SIZE` | `1000` | Ring buffer boyutu (metric başına) |
+| `OTEL_ENABLED` | `false` | OpenTelemetry aktif |
+| `ELASTICSEARCH_ENABLED` | `false` | ES aktif |
+| `PROMETHEUS_URL` | - | Prometheus HTTP API |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | - | OTLP endpoint |
+| `ELASTICSEARCH_URL` | `http://localhost:9200` | ES URL |
+| `ELASTICSEARCH_INDEX_PREFIX` | `aegis-logs` | ES index prefix |
+| `metricPrefix` | `aegis_` | Prometheus metrik prefix'i |
+| `retryCount` | `3` | Prometheus sorgu retry |
+| `retryDelay` | `1000` | Retry base delay (ms) |
+
+---
+
+## 🧪 Test Stratejisi
+
+### Test Kapsamı
+- **%80+ line coverage** hedefi
+- Pure fonksiyonlar (anomaly-algorithms) → unit test
+- Servisler (observabilityService) → integration test
+- Middleware → integration test
+
+### Mock Stratejisi
+
+| Bağımlılık | Yöntem |
+|-----------|--------|
+| **OpenTelemetry** | In-memory mock exporter |
+| **Prometheus** | prom-client kendi registry'si |
+| **Elasticsearch** | `jest.mock('@elastic/elasticsearch')` + fixtures |
+| **Audit** | `jest.mock('@aegis/audit')` |
+| **Resilience** | `jest.mock('@aegis/resilience')` |
+
+### Örnek Test Yapısı
+```
+tests/
+├── unit/
+│   ├── anomaly-algorithms.test.ts
+│   ├── metric-helpers.test.ts
+│   └── metric-definitions.test.ts
+├── integration/
+│   ├── middleware.test.ts
+│   ├── observability.service.test.ts
+│   └── logging.service.test.ts
+└── fixtures/
+    ├── traces.fixture.ts
+    ├── metrics.fixture.ts
+    └── logs.fixture.ts
+```
+
+---
+
+## 📋 Version Policy
+
+- **Semver:** `MAJOR.MINOR.PATCH`
+- **MAJOR:** Breaking change
+- **MINOR:** Yeni özellik (geriye uyumlu)
+- **PATCH:** Bug fix
+
+**Breaking change örnekleri:**
+- Fonksiyon imzası değişikliği
+- Type değişikliği (required → optional ters çevirme)
+- Default değer değişikliği
+- Env değişkeni ismi değişikliği
+
+---
+
 ## 🔗 Delegasyon Özeti
 
-| Kullandığı | Fonksiyon | Amaç |
+| Kullandığı | Fonksiyon | İmza |
 |-----------|-----------|------|
-| `core` | `createLogger()` | Logging |
-| `core` | `AppError` | Hata yönetimi |
-| `core` | `generateId()` | Trace ID üretimi |
-| `core` | `retry()` | Prometheus sorgu retry |
-| `audit` | `getAuditLogByCorrelationId()` | Log-trace korelasyonu |
-| `resilience` | `getAllHealthStatus()` | Servis sağlık kontrolü |
+| `core` | `createLogger(name)` | `(name: string) => Logger` |
+| `core` | `AppError` | `(code, message, statusCode, details?) => AppError` |
+| `core` | `generateId(prefix?)` | `(prefix?: string) => string` |
+| `core` | `retry(fn, options?)` | `(fn: () => Promise<T>, options?: RetryOptions) => Promise<T>` |
+| `audit` | `getAuditLogByCorrelationId(id)` | `(correlationId: string) => Promise<AuditLog[]>` |
+| `resilience` | `getAllHealthStatus()` | `() => Promise<Record<string, HealthCheckResult>>` |
+
+---
+
+## 📚 İmza Referansları
+
+### Core'dan Gelen
+
+```typescript
+// Logger
+export interface Logger {
+  info: (message: string, meta?: any) => void;
+  error: (message: string, error?: Error, meta?: any) => void;
+  warn: (message: string, meta?: any) => void;
+  debug: (message: string, meta?: any) => void;
+}
+
+// AppError
+export class AppError extends Error {
+  code: string;
+  statusCode: number;
+  details?: Record<string, any>;
+  constructor(
+    code: string,
+    message: string,
+    statusCode: number,
+    details?: Record<string, any>
+  );
+}
+
+// RetryOptions
+export interface RetryOptions {
+  maxRetries?: number;
+  delay?: number;
+  backoffStrategy?: 'exponential' | 'linear' | 'none';
+  jitter?: boolean;
+}
+
+// Fonksiyonlar
+export function createLogger(name: string, options?: LoggerOptions): Logger;
+export function generateId(prefix?: string, length?: number): string;
+export function retry<T>(fn: () => Promise<T>, options?: RetryOptions): Promise<T>;
+```
+
+### Audit'ten Gelen
+
+```typescript
+export interface AuditLog {
+  id: string;
+  userId: string;
+  entityType: string;
+  entityId: string;
+  action: 'CREATE' | 'UPDATE' | 'DELETE';
+  changes: Record<string, { old: any; new: any }>;
+  metadata?: AuditMetadata;
+  timestamp: Date;
+  status: 'completed' | 'failed';
+}
+```
+
+### Resilience'dan Gelen
+
+```typescript
+export interface HealthCheckResult {
+  serviceName: string;
+  status: 'healthy' | 'unhealthy';
+  responseTime: number;
+  lastCheckedAt: Date;
+  consecutiveFailures?: number;
+  error?: string;
+}
+```
 
 ---
 
 ## 📄 Lisans
 
 MIT
+
+
+
+
+Değişiklik Kaydı:
+
+types/ dizinine 2 yeni dosya eklendi:
+
+report.types.ts (Report Types)
+
+prometheus.types.ts (Prometheus Types)
