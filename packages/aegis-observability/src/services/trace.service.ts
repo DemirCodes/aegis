@@ -70,6 +70,7 @@ export function toInternalSpan(readable: ReadableSpan): Span {
  * README: observabilityService.getTraceDetails → TraceDetails
  */
 export async function getTraceDetails(traceId: string): Promise<TraceDetails> {
+  pruneOldSpans();
   const spans: Span[] = memoryExporter
     .getFinishedSpans()
     .filter((s: ReadableSpan) => s.spanContext().traceId === traceId)

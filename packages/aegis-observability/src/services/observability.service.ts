@@ -16,7 +16,7 @@ import type {
   SystemOverview,
   EndpointMetric,
 } from '../types/report.types';
-import type { MetricResult } from '../types/prometheus.types';
+import type { MetricResult, PrometheusQuery } from '../types/prometheus.types';
 import type { TimeWindow } from '../types/metrics.types';
 import {
   getTraceDetails,
@@ -26,22 +26,23 @@ import {
 } from './trace.service';
 import { correlateTraceWithLogs } from './correlation.service';
 import type { DependencyGraph } from '../types/trace.types';
+import { METRIC_NODEJS_EVENTLOOP_DELAY_P99 } from '@opentelemetry/semantic-conventions/incubating';
 
 const logger = createLogger('aegis-observability:observability-service');
 
 const PROMETHEUS_URL = (): string | undefined => process.env.PROMETHEUS_URL;
 
-async function promQuery(promql: string): Promise<MetricResult> {
+async function promQuery(query: PrometheusQuery): Promise<MetricResult> {
   const url = PROMETHEUS_URL();
   if (!url) {
     throw new AppError({
       code: 'INTERNAL_ERROR',
-      message: 'PROMETHEUS_URL not configured',
+      message: 'PROMETHEUS_URL is not configured',
       statusCode: 500,
     });
   }
 
-  const endpoint = `${url}/api/v1/query?query=${encodeURIComponent(promql)}`;
+  const endpoint = `${url}/api/v1/query?query=${encodeURIComponent(query.expression)}`;
   const data = await retry(async () => {
     const res = await fetch(endpoint);
     if (!res.ok) {
@@ -71,6 +72,20 @@ function windowToSeconds(w: TimeWindow): number {
   if (w === 'day') return 86400;
   return 604800;
 }
+
+
+function expressionQuery(expression: string): PrometheusQuery {
+  const now = new Date();
+  return {
+    expression,
+    start: new Date(now.getTime() - 5 * 60 * 1000),
+    end: now,
+    step: '15s',
+  };
+}
+
+
+
 
 /**
  * README: observabilityService.getServiceHealthStatus → HealthStatus
@@ -103,8 +118,10 @@ async function getErrorRateByEndpoint(options?: {
   const range = `${windowToSeconds(w)}s`;
 
   const result = await promQuery(
-    `sum by (method, route) (rate(aegis_http_errors_total[${range}])) / ` +
-      `sum by (method, route) (rate(aegis_http_requests_total[${range}])) * 100`
+    expressionQuery(
+      `sum by (method ,route) (rate(aegis_http_errors_total[${range})) /` +
+      `sum by (method ,route) (rate(aegis_http_requests_total[${range}])) * 100 `
+    )
   );
 
   if (result.value.length === 0) return [];
@@ -130,13 +147,19 @@ async function getLatencyPercentiles(
   endpoint: string
 ): Promise<LatencyPercentiles> {
   const queries = ['0.50', '0.75', '0.95', '0.99'].map((q) =>
-    promQuery(
-      `histogram_quantile(${q}, rate(aegis_http_request_duration_seconds_bucket{route="${endpoint}"}[5m]))`
-    )
+    promQuery
+      (
+        expressionQuery(
+          `histogram_quantile(${q}, rate(aegis_http_request_duration_seconds_bucket{route="${endpoint}"}[5m]))`
+        )
+      )
   );
-  const maxQuery = promQuery(
-    `max(aegis_http_request_duration_seconds_bucket{route="${endpoint}"})`
-  );
+  const maxQuery = promQuery
+    (
+      expressionQuery(
+        `max(aegis_http_request_duration_seconds_bucket{route="${endpoint}"})`
+      )
+    );
 
   const [p50, p75, p95, p99, max] = await Promise.all([...queries, maxQuery]);
 
@@ -154,7 +177,7 @@ async function getLatencyPercentiles(
  * README: observabilityService.customMetricQuery → MetricResult
  */
 async function customMetricQuery(promql: string): Promise<MetricResult> {
-  return promQuery(promql);
+  return promQuery(expressionQuery(promql));
 }
 
 /**
@@ -176,7 +199,7 @@ async function getSystemOverview(): Promise<SystemOverview> {
     errorRate:
       errorRates.length > 0
         ? errorRates.reduce((sum, e) => sum + e.errorRate, 0) /
-          errorRates.length
+        errorRates.length
         : health.errorRate,
     timestamp: new Date(),
   };
@@ -194,23 +217,39 @@ async function generatePerformanceReport(
 
   const [avg, p95, p99, rate, total, slowEndpoints, errorEndpoints] =
     await Promise.all([
-      promQuery(`avg(rate(aegis_http_request_duration_seconds_sum[${range}]))`),
       promQuery(
-        `histogram_quantile(0.95, rate(aegis_http_request_duration_seconds_bucket[${range}]))`
+        expressionQuery(
+          (`avg(rate(aegis_http_request_duration_seconds_sum[${range}]))`),
+        )
       ),
+      promQuery
+        (
+          expressionQuery(
+
+
+            `histogram_quantile(0.95, rate(aegis_http_request_duration_seconds_bucket[${range}]))`
+          )),
+      promQuery
+        (
+          expressionQuery(
+            `histogram_quantile(0.99, rate(aegis_http_request_duration_seconds_bucket[${range}]))`
+          )),
+      promQuery
+        (
+          expressionQuery(
+            `rate(aegis_http_errors_total[${range}]) / rate(aegis_http_requests_total[${range}])`
+          )),
+      promQuery(expressionQuery(`sum(rate(aegis_http_requests_total[${range}]))`)),
       promQuery(
-        `histogram_quantile(0.99, rate(aegis_http_request_duration_seconds_bucket[${range}]))`
-      ),
+        expressionQuery(
+          `topk(10, avg by (route, method) (rate(aegis_http_request_duration_seconds_sum[${range}])))`
+        )),
       promQuery(
-        `rate(aegis_http_errors_total[${range}]) / rate(aegis_http_requests_total[${range}])`
-      ),
-      promQuery(`sum(rate(aegis_http_requests_total[${range}]))`),
-      promQuery(
-        `topk(10, avg by (route, method) (rate(aegis_http_request_duration_seconds_sum[${range}])))`
-      ),
-      promQuery(
-        `topk(10, sum by (route, method) (rate(aegis_http_errors_total[${range}])))`
-      ),
+        expressionQuery(
+
+
+          `topk(10, sum by (route, method) (rate(aegis_http_errors_total[${range}])))`
+        )),
     ]);
 
   const toEndpointMetric = (m: MetricResult): EndpointMetric => ({
@@ -231,11 +270,11 @@ async function generatePerformanceReport(
       : [],
     topErrorEndpoints: errorEndpoints.metric.route
       ? [
-          {
-            ...toEndpointMetric(errorEndpoints),
-            errorRate: errorEndpoints.value[0],
-          },
-        ]
+        {
+          ...toEndpointMetric(errorEndpoints),
+          errorRate: errorEndpoints.value[0],
+        },
+      ]
       : [],
   };
 }
@@ -260,6 +299,7 @@ function classifySpanType(span: Span): DependencyNode['type'] {
   if (span.tags['http.url'] || span.tags['rpc.service']) return 'external';
   return 'service';
 }
+
 
 async function getDependencyGraph(): Promise<DependencyGraph> {
   const spans: Span[] = memoryExporter
