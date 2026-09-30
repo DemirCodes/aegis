@@ -1,5 +1,5 @@
 // ============================================================
-// index.ts (ROOT — FINAL)
+// index.ts (ROOT)
 // ============================================================
 
 // --- Config & Init ---
@@ -39,7 +39,7 @@ export { searchLogs, getLogStats } from './services/logging.service';
 // --- Services: Observability ---
 export { observabilityService } from './services/observability.service';
 
-// --- Public Types ---
+// --- Public Types: Metrics ---
 export type {
   AnomalySeverity,
   HealthStatusLevel,
@@ -58,6 +58,7 @@ export type {
   UserMetrics,
 } from './types/metrics.types';
 
+// --- Public Types: Trace ---
 export type {
   Span,
   SpanLog,
@@ -69,6 +70,7 @@ export type {
   DependencyGraph,
 } from './types/trace.types';
 
+// --- Public Types: Log ---
 export type {
   LogEntry,
   CorrelatedData,
@@ -76,6 +78,7 @@ export type {
   LogStats,
 } from './types/log.types';
 
+// --- Public Types: Report ---
 export type {
   PerformanceReport,
   EndpointMetric,
@@ -85,6 +88,7 @@ export type {
   SystemOverview,
 } from './types/report.types';
 
+// --- Public Types: Prometheus ---
 export type {
   PrometheusQuery,
   MetricResult,

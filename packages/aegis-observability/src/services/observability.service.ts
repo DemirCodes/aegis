@@ -4,7 +4,7 @@
 
 import { createLogger, AppError, retry } from '@aegis/core';
 import { memoryExporter } from '../exporters/otel-exporter';
-import { toInternalSpan } from './trace.service';
+import { toInternalSpan , pruneOldSpans } from './trace.service';
 import type { Span } from '../types/trace.types';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 
@@ -302,6 +302,7 @@ function classifySpanType(span: Span): DependencyNode['type'] {
 
 
 async function getDependencyGraph(): Promise<DependencyGraph> {
+  pruneOldSpans();   // ← EKLE
   const spans: Span[] = memoryExporter
     .getFinishedSpans()
     .map((s: ReadableSpan) => toInternalSpan(s));

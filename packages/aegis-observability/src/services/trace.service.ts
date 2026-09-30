@@ -70,7 +70,8 @@ export function toInternalSpan(readable: ReadableSpan): Span {
  * README: observabilityService.getTraceDetails → TraceDetails
  */
 export async function getTraceDetails(traceId: string): Promise<TraceDetails> {
-  pruneOldSpans();
+  pruneOldSpans();   // ← EKLE
+
   const spans: Span[] = memoryExporter
     .getFinishedSpans()
     .filter((s: ReadableSpan) => s.spanContext().traceId === traceId)
@@ -161,6 +162,8 @@ export async function getSlowTraces(
   threshold = 1000,
   limit = 100
 ): Promise<SlowTrace[]> {
+  pruneOldSpans();   // ← EKLE
+
   return memoryExporter
     .getFinishedSpans()
     .map((s: ReadableSpan) => toInternalSpan(s))
@@ -177,8 +180,11 @@ export async function getSlowTraces(
 
 /**
  * README: observabilityService.getFailedTraces → FailedTrace[]
+ * Değişiklik Kaydı #11: pruneOldSpans() başta çağrılır.
  */
 export async function getFailedTraces(limit = 100): Promise<FailedTrace[]> {
+  pruneOldSpans();   // ← EKLE
+
   return memoryExporter
     .getFinishedSpans()
     .map((s: ReadableSpan) => toInternalSpan(s))
