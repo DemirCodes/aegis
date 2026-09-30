@@ -21,6 +21,7 @@ pnpm add @aegis/observability
 ```
 src/
 ├── index.ts
+├── config.ts                             → initObservability, ObservabilityConfig
 ├── middleware/
 │   ├── index.ts
 │   ├── trace-correlation.middleware.ts   → traceCorrelationMiddleware
@@ -39,13 +40,15 @@ src/
 │   ├── index.ts
 │   ├── observability.service.ts          → observabilityService (singleton)
 │   ├── logging.service.ts                → searchLogs, getLogStats
-│   ├── trace.service.ts                  → internal trace helpers
+│   ├── trace.service.ts                  → internal trace helpers (pruneOldSpans dahil)
 │   └── correlation.service.ts            → internal correlation helpers
 ├── types/
 │   ├── index.ts                          → re-export
 │   ├── metrics.types.ts                  → metric ve anomali tipleri
 │   ├── trace.types.ts                    → trace tipleri
-│   └── log.types.ts                      → log tipleri
+│   ├── log.types.ts                      → log tipleri
+│   ├── report.types.ts                   → report tipleri
+│   └── prometheus.types.ts               → Prometheus tipleri
 └── utils/
     ├── index.ts
     ├── anomaly-algorithms.ts             → internal (Z-Score, IQR, Seasonal, Spike)
@@ -104,6 +107,8 @@ import type { HealthCheckResult } from '@aegis/resilience';
 ### `initObservability(config?)`
 
 **Açıklama:** Observability modülünü başlatır. Env değişkenleri default, config override eder.
+
+**Config tipi:** `ObservabilityConfig`
 
 | Parametre | Tip | Default | Açıklama |
 |-----------|-----|---------|----------|
@@ -164,6 +169,9 @@ initializeOTelExporter({
   endpoint: 'http://localhost:4317',
 });
 ```
+> **NOT (Değişiklik Kaydı #3):** `otel-exporter.ts` içinde `memoryExporter` (InMemorySpanExporter) **internal export** olarak tanımlanır. `trace.service.ts` bu exporter'dan span okur. Public API'ye açılmaz.
+
+
 
 ---
 
@@ -204,39 +212,31 @@ if (!isInitialized) {
 
 ### `initObservability()` ve `initializeOTelExporter()` İlişkisi
 
-**Prensip:** **Ayrı Sorumluluk** (Anayasa Kural 1)
+**Prensip:** **Otomatik Entegrasyon** (Değişiklik Kaydı #10)
 
-Her iki fonksiyon da **bağımsız** çalışır. Biri diğerini tetiklemez.
+`initObservability({ enableOtel: true })` çağrıldığında, `initializeOTelExporter` **otomatik olarak** çağrılır. Kullanıcı ayrıca manuel çağırmak zorunda değildir.
 
 | Fonksiyon | Sorumluluk |
 |-----------|------------|
 | `initObservability()` | Global config + logger + metric prefix ayarla |
-| `initializeOTelExporter()` | Sadece OTel SDK başlat |
+| `initializeOTelExporter()` | OTel SDK başlat (initObservability içinden otomatik tetiklenir) |
 
 ### `initObservability({ enableOtel: true })` Ne Yapar?
 
 - Global config'i ayarlar (`enableOtel: true` olarak işaretler)
-- **OTel SDK'yı BAŞLATMAZ**
-- Sadece "OTel isteniyor" bilgisini saklar
+- **OTel SDK'yı OTOMATİK BAŞLATIR** (Değişiklik Kaydı #10)
+- `initializeOTelExporter()` iç çağrı ile tetiklenir
 
-### Kullanıcı İkisini de Çağırmalı
+### Kullanıcı Tek Çağrı Yapar
 
 ```typescript
-// ✅ DOĞRU KULLANIM
-import { initObservability, initializeOTelExporter } from '@aegis/observability';
+// ✅ DOĞRU KULLANIM (Değişiklik Kaydı #10)
+import { initObservability } from '@aegis/observability';
 
-// 1. Config
-initObservability({ 
+initObservability({
   serviceName: 'payment-api',
-  enableOtel: true,
+  enableOtel: true,  // → initializeOTelExporter otomatik çağrılır
 });
-
-// 2. OTel SDK (ayrı sorumluluk)
-initializeOTelExporter({
-  serviceName: 'payment-api',
-  endpoint: 'http://localhost:4317',
-});
-```
 
 ### Idempotent Davranış
 
@@ -1051,6 +1051,8 @@ const graph = await observabilityService.getDependencyGraph();
 // { nodes: [...], edges: [{ from: 'api', to: 'db', callCount: 5000 }] }
 ```
 
+> **NOT (Değişiklik Kaydı #11):** `getTraceDetails`, `getSlowTraces`, `getFailedTraces`, `getDependencyGraph` fonksiyonları her çağrıda önce `pruneOldSpans()` çalıştırır (OOM koruması). Bu internal bir davranıştır, kullanıcı müdahalesi gerekmez.
+
 ---
 
 ## 📌 Logging
@@ -1210,6 +1212,7 @@ export interface UserMetrics {
 export interface Span {
   spanId: string;
   traceId: string;
+  parentSpanId?: string;   // Değişiklik Kaydı #2
   operationName: string;
   duration: number;
   status: 'ok' | 'error';
@@ -1532,17 +1535,37 @@ export interface HealthCheckResult {
 
 ---
 
+
+---
+
+## 📝 Değişiklik Kayıtları
+
+Aşağıdaki değişiklikler orijinal README'ye göre yapılmıştır. Her biri gerekçesiyle birlikte listelenmiştir.
+
+| # | Dosya | Değişiklik | Gerekçe |
+|---|-------|-----------|---------|
+| 1 | `types/report.types.ts`, `types/prometheus.types.ts` | Yeni dosyalar eklendi | README'de Report Types ve Prometheus Types başlıkları vardı ama dosya yoktu |
+| 2 | `types/trace.types.ts` | `Span.parentSpanId?: string` eklendi | `buildTraceTree` ve `getDependencyGraph` parent-child ilişkisi için gerekli |
+| 3 | `exporters/otel-exporter.ts` | `memoryExporter` export edildi | `trace.service.ts`'in OTel in-memory store'a erişmesi için |
+| 4 | `services/trace.service.ts` | `pruneOldSpans` fonksiyonu eklendi | `InMemorySpanExporter` sınırsız büyür → OOM koruması |
+| 5 | `services/observability.service.ts` | `@aegis/resilience` geçici mock | Paket henüz yazılmadı → TODO olarak işaretlendi |
+| 6 | `services/observability.service.ts` | `getDependencyGraph` → `DependencyGraph` tipi | README'de tanımlı, kullanılmalı |
+| 7 | `services/observability.service.ts` | `promQuery` → `PrometheusQuery` tipi | README'de tanımlı, kullanılmalı |
+| 8 | `src/config.ts` | Yeni dosya eklendi | `initObservability` fonksiyonu için konum belirsizdi |
+| 9 | `src/config.ts` | `ObservabilityConfig` interface eklendi | README'de tip adı yoktu, parametreler vardı |
+| 10 | `src/config.ts` | `initializeOTelExporter` otomatik çağrı | Kural 10: Güvenli + Kullanışlı (kullanıcı unutma riski yok) |
+| 11 | `services/trace.service.ts` + `observability.service.ts` | `pruneOldSpans()` 4 yerde çağrılıyor | OOM koruması, otomatik bellek yönetimi |
+
+### Geçici Notlar
+
+- **Değişiklik #5:** `@aegis/resilience` paketi yazıldığında `getServiceHealthStatus` fonksiyonu gerçek `getAllHealthStatus()` entegrasyonu ile güncellenecektir.
+- **Değişiklik #10:** `initializeOTelExporter` hâlâ public API'de mevcuttur; `enableOtel: true` ile otomatik çağrılır. Bu, "Ayrı Sorumluluk" prensibinden sapmadır ve bilinçli bir tasarım kararıdır (Kural 10).
+
+
+---
 ## 📄 Lisans
 
 MIT
 
 
 
-
-Değişiklik Kaydı:
-
-types/ dizinine 2 yeni dosya eklendi:
-
-report.types.ts (Report Types)
-
-prometheus.types.ts (Prometheus Types)
