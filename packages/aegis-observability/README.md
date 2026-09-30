@@ -237,7 +237,7 @@ initObservability({
   serviceName: 'payment-api',
   enableOtel: true,  // → initializeOTelExporter otomatik çağrılır
 });
-
+```
 ### Idempotent Davranış
 
 Her iki fonksiyon da **idempotent**'tır. Aynı işlevi iki kez çağırmak zarar vermez.
