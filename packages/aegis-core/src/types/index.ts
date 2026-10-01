@@ -1,12 +1,11 @@
 // ============================================
 // @aegis/core - Types Barrel Export
-// Tüm tip tanımlarını tek noktadan dışa aktarır
 // ============================================
 
-// Ortak tipler
 export type {
   PaginationOptions,
   PaginatedResult,
+  ChangesMap,
   ApiResponse,
   ApiError,
   Timestamps,
@@ -17,7 +16,6 @@ export type {
   SerializationOptions,
 } from './common.types';
 
-// Hata tipleri
 export type {
   AppErrorType,
   ErrorContext,

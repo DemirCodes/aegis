@@ -41,6 +41,7 @@ export type {
   PaginationOptions,
   PaginatedResult,
   ApiResponse,
+  ChangesMap,
   ApiError,
   Timestamps,
   Status,
@@ -88,3 +89,16 @@ export type { RetryOptions } from './utils/retry';
 
 // --- DECORATORS (Dekoratörler) ---
 export { Deprecated } from './decorators/deprecated.decorator';
+// Mask Helpers
+export { maskSensitiveData, DEFAULT_SENSITIVE_FIELDS } from './utils/mask-helpers';
+
+// Diff Helpers
+export { diffChanges, formatChangesSummary } from './utils/diff-helpers';
+
+// Pagination Helpers
+export { normalizePagination } from './utils/pagination-helpers';
+export type { NormalizedPagination } from './utils/pagination-helpers';
+
+// Export Helpers
+export { exportData } from './utils/export-helpers';
+export type { ExportFormat, ExportOptions } from './utils/export-helpers';

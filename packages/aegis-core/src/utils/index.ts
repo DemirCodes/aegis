@@ -1,6 +1,5 @@
 // ============================================
 // @aegis/core - Utils Barrel Export
-// Tüm yardımcı fonksiyonları tek noktadan dışa aktarır
 // ============================================
 
 // Logger
@@ -20,3 +19,18 @@ export { generateId, generateUUID } from './id-generator';
 
 // Retry
 export { retry } from './retry';
+export type { RetryOptions } from './retry';
+
+// Mask Helpers
+export { maskSensitiveData, DEFAULT_SENSITIVE_FIELDS } from './mask-helpers';
+
+// Diff Helpers
+export { diffChanges, formatChangesSummary } from './diff-helpers';
+
+// Pagination Helpers
+export { normalizePagination } from './pagination-helpers';
+export type { NormalizedPagination } from './pagination-helpers';
+
+// Export Helpers
+export { exportData } from './export-helpers';
+export type { ExportFormat, ExportOptions } from './export-helpers';

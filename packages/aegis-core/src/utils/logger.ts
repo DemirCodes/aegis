@@ -6,6 +6,7 @@
 import winston from 'winston';
 import path from 'path';
 import fs from 'fs';
+import { maskSensitiveData } from './mask-helpers';
 
 // --- TİP TANIMLARI ---
 
@@ -34,46 +35,6 @@ export type Logger = {
   debug: (message: string, meta?: Record<string, any>) => void;
   child: (meta: Record<string, any>) => Logger;
 };
-
-// --- HASSAS VERİ SANITIZATION ---
-
-// Log'da görünmemesi gereken hassas alan adları
-const SENSITIVE_KEYS = [
-  'password', 'secret', 'token', 'key', 'authorization',
-  'credit', 'card', 'cvv', 'ssn', 'passport',
-];
-
-/**
- * Loglanacak metadata içindeki hassas verileri maskeler
- * İç içe objeleri de 1 seviye kontrol eder
- * 
- * @param meta - Ham metadata objesi
- * @returns Maskelenmiş metadata (hassas alanlar '[REDACTED]' olur)
- */
-function sanitizeMeta(meta?: Record<string, any>): Record<string, any> | undefined {
-  if (!meta || typeof meta !== 'object') return meta;
-  
-  const sanitized = { ...meta };
-  
-  for (const key of Object.keys(sanitized)) {
-    const lowerKey = key.toLowerCase();
-    
-    // Hassas anahtar kelime içeriyorsa maskele
-    if (SENSITIVE_KEYS.some(sensitive => lowerKey.includes(sensitive))) {
-      sanitized[key] = '[REDACTED]';
-    }
-    // İç içe objeleri de kontrol et (1 seviye derinlik)
-    else if (
-      typeof sanitized[key] === 'object' &&
-      sanitized[key] !== null &&
-      !Array.isArray(sanitized[key])
-    ) {
-      sanitized[key] = sanitizeMeta(sanitized[key]);
-    }
-  }
-  
-  return sanitized;
-}
 
 // --- ELASTICSEARCH TRANSPORT (Opsiyonel) ---
 
@@ -264,33 +225,40 @@ export function createLogger(name: string, options?: LoggerOptions): Logger {
   // Logger arayüzünü döndür (sadeleştirilmiş, tip güvenli)
   return {
     info: (message: string, meta?: Record<string, any>) => {
-      winstonLogger.info(message, sanitizeMeta(meta));
+      winstonLogger.info(message, meta ? maskSensitiveData(meta) : undefined);
     },
     
     error: (message: string, error?: Error, meta?: Record<string, any>) => {
       winstonLogger.error(message, {
         error: error?.message,
         stack: error?.stack,
-        ...sanitizeMeta(meta),
+        ...(meta ? maskSensitiveData(meta) : {}),
       });
     },
     
     warn: (message: string, meta?: Record<string, any>) => {
-      winstonLogger.warn(message, sanitizeMeta(meta));
+      winstonLogger.warn(message, meta ? maskSensitiveData(meta) : undefined);
     },
     
     debug: (message: string, meta?: Record<string, any>) => {
-      winstonLogger.debug(message, sanitizeMeta(meta));
+      winstonLogger.debug(message, meta ? maskSensitiveData(meta) : undefined);
     },
     
     child: (meta: Record<string, any>) => {
       const childLogger = winstonLogger.child(meta);
       return {
-        info: (message: string, m?: Record<string, any>) => childLogger.info(message, m),
+        info: (message: string, m?: Record<string, any>) =>
+          childLogger.info(message, m ? maskSensitiveData(m) : undefined),
         error: (message: string, error?: Error, m?: Record<string, any>) =>
-          childLogger.error(message, { error: error?.message, ...m }),
-        warn: (message: string, m?: Record<string, any>) => childLogger.warn(message, m),
-        debug: (message: string, m?: Record<string, any>) => childLogger.debug(message, m),
+          childLogger.error(message, {
+            error: error?.message,
+            stack: error?.stack,
+            ...(m ? maskSensitiveData(m) : {}),
+          }),
+        warn: (message: string, m?: Record<string, any>) =>
+          childLogger.warn(message, m ? maskSensitiveData(m) : undefined),
+        debug: (message: string, m?: Record<string, any>) =>
+          childLogger.debug(message, m ? maskSensitiveData(m) : undefined),
         child: (m2: Record<string, any>) => createLogger(`${name}:child`, options),
       };
     },

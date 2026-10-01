@@ -3,7 +3,7 @@
 // Framework'un temel hata sınıfı - tüm özel hatalar bundan türetilir
 // ============================================
 
-import { ErrorCode, ErrorSeverity, getHttpStatus, getSeverity, getCategory } from '../constants/error-codes';
+import { ErrorCode, ErrorSeverity, getHttpStatus, getSeverity } from '../constants/error-codes';
 
 // AppError constructor parametreleri için tip tanımı
 export interface AppErrorOptions {
